@@ -82,6 +82,13 @@ cat("Trans-eQTL windows:", nrow(trans_bed), "\n")
 # ============================================================
 cat("\n=== STEP 5: Intersect array variants with ENCODE cCREs ===\n")
 
+cis_ov <- foverlaps(bim, ccre,
+                    by.x = c("CHR", "START", "END"),
+                    by.y = c("CHR", "START", "END"),
+                    nomatch = NA)
+
+cis_ids <- cis_ov[!is.na(i.START), unique(ID)]
+cat("CIS variant IDs:", length(cis_ids), "\n")
 
 
 # ============================================================
@@ -89,6 +96,13 @@ cat("\n=== STEP 5: Intersect array variants with ENCODE cCREs ===\n")
 # ============================================================
 cat("\n=== STEP 6: Intersect array variants with trans-eQTL windows ===\n")
 
+trans_ov <- foverlaps(bim, trans_bed,
+                      by.x = c("CHR", "START", "END"),
+                      by.y = c("CHR", "START", "END"),
+                      nomatch = NA)
+
+trans_ids <- trans_ov[!is.na(i.START), unique(ID)]
+cat("TRANS variant IDs:", length(trans_ids), "\n")
 
 
 # ============================================================
@@ -96,6 +110,24 @@ cat("\n=== STEP 6: Intersect array variants with trans-eQTL windows ===\n")
 # ============================================================
 cat("\n=== STEP 7: Build REG annotation ===\n")
 
+reg_ids <- union(cis_ids, trans_ids)
+
+cat("TRANS only:    ", length(trans_ids), "\n")
+cat("CIS only:      ", length(cis_ids), "\n")
+cat("REG (union):   ", length(reg_ids), "\n")
+cat("OTHER:         ", nrow(bim) - length(reg_ids), "\n")
+cat("Total array:   ", nrow(bim), "\n")
+cat(sprintf("REG %%:          %.2f%%\n", length(reg_ids) / nrow(bim) * 100))
+
+# Save the three ID files
+fwrite(data.table(ID = trans_ids),
+       file.path(BASE, "TRANS_array_variants.txt"), col.names = FALSE)
+
+fwrite(data.table(ID = cis_ids),
+       file.path(BASE, "CIS_array_variants.txt"), col.names = FALSE)
+
+fwrite(data.table(ID = reg_ids),
+       file.path(BASE, "REG_array_variants.txt"), col.names = FALSE)
 
 
 # ============================================================
@@ -103,9 +135,27 @@ cat("\n=== STEP 7: Build REG annotation ===\n")
 # ============================================================
 cat("\n=== STEP 8: Save full annotation table ===\n")
 
+annot <- data.table(
+  ID       = bim$ID,
+  CHR      = bim$CHR,
+  POS      = bim$POS,
+  is_TRANS = bim$ID %in% trans_ids,
+  is_CIS   = bim$ID %in% cis_ids
+)
+annot[, is_REG   := is_TRANS | is_CIS]
+annot[, category := fcase(
+  is_TRANS & is_CIS, "TRANS_CIS",
+  is_TRANS,          "TRANS_only",
+  is_CIS,            "CIS_only",
+  default =          "OTHER"
+)]
 
 
 cat("\nAnnotation breakdown:\n")
+
+fwrite(annot,
+       file.path(ANNOT_DIR, "variant_annotation_full.csv.gz"),
+       compress = "gzip")
 
 cat("\n=== DONE ===\n")
 cat("Key output files:\n")
