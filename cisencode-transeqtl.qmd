@@ -1,31 +1,30 @@
 # How to read Cis form Encode and Trans from Gtex and merge them as Reg variant : Note there is Diff Btw CisEQTL from GTEX and Cis from Encode 
-
+# I did write this code in Bash
 R --vanilla -q << 'EOF'
-suppressPackageStartupMessages(library(data.table))
 
 BASE      <- "/home/jupyter/Chapter2_Azadeh_01072026"
 GENO      <- "/home/jupyter/arrays_white"
-ANNOT_DIR <- file.path(BASE, "annotation")
-dir.create(ANNOT_DIR, showWarnings = FALSE, recursive = TRUE)
+ANNOT_DIR <- file.path(Base, "annotation")
+
+dir.create(ANNOT_DIR, showWarnings = FALSE , recursive = TRUE)
 
 # ============================================================
 # STEP 1: Download ENCODE cCREs (GRCh38)
 # ============================================================
 cat("=== STEP 1: Download ENCODE cCREs ===\n")
 
-ccre_file <- file.path(ANNOT_DIR, "GRCh38-cCREs.bed")
+ccre_file <- file.path (ANNOT_DIR, "GRCh38-cCREs.bed")
 
-if (!file.exists(ccre_file)) {
-  cat("Downloading ENCODE cCREs...\n")
-  download.file(
+if (!file.exists(ccre_file) ){
+cat("Downloading ENCODE cCREs...\n")
+download.file (
     url      = "https://downloads.wenglab.org/Registry-V3/GRCh38-cCREs.bed",
     destfile = ccre_file,
     mode     = "wb",
     quiet    = FALSE
-  )
-  cat("Download complete.\n")
+)
 } else {
-  cat("Already exists:", ccre_file, "\n")
+cat("Already exists:", ccre_file, "\n")
 }
 
 # ============================================================
@@ -33,15 +32,16 @@ if (!file.exists(ccre_file)) {
 # ============================================================
 cat("\n=== STEP 2: Load ENCODE cCREs ===\n")
 
-ccre <- fread(ccre_file, header = FALSE,
-              select = 1:3,
-              col.names = c("CHR", "START", "END"))
+ccre <- fread (ccre_file, header =FALSE, 
+select = 1:3, 
+col.names =c("CHR", "START", "END"))
 
 # Keep only autosomes, strip "chr" prefix
-ccre <- ccre[grepl("^chr[0-9]+$", CHR)]
-ccre[, CHR := as.integer(sub("^chr", "", CHR))]
-ccre <- ccre[!is.na(CHR) & CHR >= 1L & CHR <= 22L]
-setkey(ccre, CHR, START, END)
+
+ccre <- ccre [grep("^chr[0-9]+$"), CHR]
+ccre[, CHR:= as.integer(sub("^chr", "", CHR))]
+ccre <- ccre[!is.na(CHR & CHR >=1L & CHR <=22L)]
+setkey (ccre, CHR, START, END)
 
 cat("ENCODE cCRE regions:", nrow(ccre), "\n")
 
@@ -50,17 +50,18 @@ cat("ENCODE cCRE regions:", nrow(ccre), "\n")
 # ============================================================
 cat("\n=== STEP 3: Load array variants ===\n")
 
-bim <- fread(paste0(GENO, ".bim"), header = FALSE,
-             col.names = c("CHR", "ID", "CM", "POS", "A1", "A2"))
-bim[, CHR := as.integer(CHR)]
+bim <- fread(paste0(GENO, ".bim"), header = FALSE, 
+col.names = c("CHR", "ID", "CM", "POS", "A1", "A2"))
+
+bim[, CHR:= as.integer(CHR)]
 bim <- bim[!is.na(CHR) & CHR >= 1L & CHR <= 22L]
 
 # For foverlaps we need START and END (point interval: POS to POS)
-bim[, START := POS]
-bim[, END   := POS]
-setkey(bim, CHR, START, END)
+# SNP become one pair interval
 
-cat("Array variants:", nrow(bim), "\n")
+bim[, START:= POS]
+bim[, END  := POS]
+setkey(bim, CHR, START, END)
 
 # ============================================================
 # STEP 4: Load trans-eQTL windows (already built)
@@ -81,77 +82,30 @@ cat("Trans-eQTL windows:", nrow(trans_bed), "\n")
 # ============================================================
 cat("\n=== STEP 5: Intersect array variants with ENCODE cCREs ===\n")
 
-cis_ov <- foverlaps(bim, ccre,
-                    by.x = c("CHR", "START", "END"),
-                    by.y = c("CHR", "START", "END"),
-                    nomatch = NA)
 
-cis_ids <- cis_ov[!is.na(i.START), unique(ID)]
-cat("CIS variant IDs:", length(cis_ids), "\n")
 
 # ============================================================
 # STEP 6: Find TRANS variants (array SNPs overlapping trans windows)
 # ============================================================
 cat("\n=== STEP 6: Intersect array variants with trans-eQTL windows ===\n")
 
-trans_ov <- foverlaps(bim, trans_bed,
-                      by.x = c("CHR", "START", "END"),
-                      by.y = c("CHR", "START", "END"),
-                      nomatch = NA)
 
-trans_ids <- trans_ov[!is.na(i.START), unique(ID)]
-cat("TRANS variant IDs:", length(trans_ids), "\n")
 
 # ============================================================
 # STEP 7: Build combined REG file
 # ============================================================
 cat("\n=== STEP 7: Build REG annotation ===\n")
 
-reg_ids <- union(cis_ids, trans_ids)
 
-cat("TRANS only:    ", length(trans_ids), "\n")
-cat("CIS only:      ", length(cis_ids), "\n")
-cat("REG (union):   ", length(reg_ids), "\n")
-cat("OTHER:         ", nrow(bim) - length(reg_ids), "\n")
-cat("Total array:   ", nrow(bim), "\n")
-cat(sprintf("REG %%:          %.2f%%\n", length(reg_ids) / nrow(bim) * 100))
-
-# Save the three ID files
-fwrite(data.table(ID = trans_ids),
-       file.path(BASE, "TRANS_array_variants.txt"), col.names = FALSE)
-
-fwrite(data.table(ID = cis_ids),
-       file.path(BASE, "CIS_array_variants.txt"), col.names = FALSE)
-
-fwrite(data.table(ID = reg_ids),
-       file.path(BASE, "REG_array_variants.txt"), col.names = FALSE)
 
 # ============================================================
 # STEP 8: Save full annotation table
 # ============================================================
 cat("\n=== STEP 8: Save full annotation table ===\n")
 
-annot <- data.table(
-  ID       = bim$ID,
-  CHR      = bim$CHR,
-  POS      = bim$POS,
-  is_TRANS = bim$ID %in% trans_ids,
-  is_CIS   = bim$ID %in% cis_ids
-)
-annot[, is_REG   := is_TRANS | is_CIS]
-annot[, category := fcase(
-  is_TRANS & is_CIS, "TRANS_CIS",
-  is_TRANS,          "TRANS_only",
-  is_CIS,            "CIS_only",
-  default =          "OTHER"
-)]
+
 
 cat("\nAnnotation breakdown:\n")
-print(annot[, .N, by = category][order(-N)])
-
-fwrite(annot,
-       file.path(ANNOT_DIR, "variant_annotation_full.csv.gz"),
-       compress = "gzip")
 
 cat("\n=== DONE ===\n")
 cat("Key output files:\n")
