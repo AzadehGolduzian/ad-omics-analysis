@@ -1,0 +1,819 @@
+---
+title: "A Two-Pathway Conceptual Model of Blood-Brain Barrier Permeability in Alzheimer’s Disease and Related Dementias"
+subtitle: "Biol 592 Final Project"
+author: "Azadeh Golduzian"
+date: last-modified
+date-format: long
+format:
+  pdf:
+    toc: false
+    number-sections: true
+    geometry: margin=1in
+    pdf-engine: xelatex
+    include-in-header:
+      text: |
+        \usepackage{amsmath}
+        \usepackage{amssymb}
+fig-width: 6.5
+fig-height: 4
+execute:
+  cache: false
+  eval: true
+  echo: false
+  warning: false
+  message: false
+---
+
+```{r setup-hidden, include=FALSE}
+library(dplyr); library(tidyr); library(purrr); library(broom)
+library(ggplot2); library(knitr); library(erikmisc)
+library(tidyverse); library(labelled)
+
+load("dat_sub_Data_inflammation_analysis_paper_06052025.RData")
+load("dat_sub_and_Var_for_inflammation_analysis.RData")
+
+dat_sheet <- dat_sub %>%
+  dplyr::mutate(
+    across(tidyselect::all_of(c(Var$csf, Var$plasma, Var$mri)), scale),
+    across(tidyselect::all_of(c(Var$csf, Var$plasma, Var$mri)), as.numeric)
+  )
+
+qalb_var   <- "fl_albumin_index_log2"
+ktrans_var <- "mri_perm_3t_tot_log2"
+
+inflam_vars <- c(
+  "fl_msd_csf_mmp_1_log2","fl_msd_csf_mmp_2_log2","fl_msd_csf_mmp_3_log2",
+  "fl_msd_csf_mmp_9_log2","fl_csf__ALL__mmp_10_log2",
+  "fl_cyto_csf_ifn_g_log2","fl_csf__ALL__il_1b_log2","fl_cyto_csf_il_2_log2",
+  "fl_cyto_csf_il_4_log2","fl_cyto_csf_il_6_log2","fl_cyto_csf_il_8_log2",
+  "fl_cyto_csf_il_10_log2","fl_cyto_csf_il_12p70_log2",
+  "fl_cyto_csf_il_13_log2","fl_cyto_csf_tnf_a_log2",
+  "fl_angio_csf_bfgf_log2","fl_angio_csf_flt_1_log2","fl_angio_csf_tie2_log2",
+  "fl_angio_csf_vegf_a_log2","fl_angio_csf_vegf_c_log2",
+  "fl_angio_csf_vegf_d_log2","fl_csf__ALL__plgf_log2"
+)
+inflam_vars <- inflam_vars[inflam_vars %in% names(dat_sheet)]
+
+wm_candidate_vars <- c("mri_dti_psmd","mri_dti_freewater_mean",
+                       "mri_mean_cort_thick_mm","mri_percent_vol_hippo")
+wm_vars <- wm_candidate_vars[wm_candidate_vars %in% names(dat_sheet)]
+
+cog_components <- c("npsy_executive_t","npsy_attention_t",
+                    "npsy_memory_t","npsy_language_t")
+dat_sheet <- dat_sheet |>
+  dplyr::mutate(
+    overall_cog   = rowMeans(dplyr::across(all_of(cog_components)), na.rm=TRUE),
+    overall_cog_z = as.numeric(scale(overall_cog))
+  )
+
+dat_sheet$inflam_score <- rowMeans(dat_sheet[, inflam_vars, drop=FALSE], na.rm=TRUE)
+dat_sheet$inflam_score[is.nan(dat_sheet$inflam_score)] <- NA
+
+if ("mri_mean_cort_thick_mm" %in% wm_vars) {
+  dat_sheet$mri_mean_cort_thick_mm <- -dat_sheet$mri_mean_cort_thick_mm
+}
+if ("mri_percent_vol_hippo" %in% wm_vars) {
+  dat_sheet$mri_percent_vol_hippo <- -dat_sheet$mri_percent_vol_hippo
+}
+dat_sheet$mri_score <- rowMeans(dat_sheet[, wm_vars, drop=FALSE], na.rm=TRUE)
+dat_sheet$mri_score[is.nan(dat_sheet$mri_score)] <- NA
+
+med_cog <- median(dat_sheet$overall_cog_z, na.rm=TRUE)
+dat_sheet$cog_bin <- ifelse(dat_sheet$overall_cog_z >= med_cog, 1L, 2L)
+ter_cuts <- quantile(dat_sheet$overall_cog_z, probs=c(0,1/3,2/3,1), na.rm=TRUE)
+dat_sheet$cog_tertile <- cut(dat_sheet$overall_cog_z, breaks=ter_cuts,
+  labels=c("3","2","1"), include.lowest=TRUE)
+dat_sheet$cog_tertile <- factor(dat_sheet$cog_tertile, levels=c("1","2","3"))
+
+delta_R2 <- function(data, outcome, score,
+                     covariates = c("age","sex","dx_current")) {
+  needed <- c(outcome, score, covariates)
+  d <- data[stats::complete.cases(data[, needed, drop=FALSE]), ]
+  if (nrow(d) < 10) return(list(delta_R2=NA_real_, n=nrow(d)))
+  f_base <- as.formula(paste(outcome,"~",paste(covariates, collapse=" + ")))
+  f_full <- as.formula(paste(outcome,"~",
+              paste(c(covariates,score), collapse=" + ")))
+  list(
+    delta_R2 = summary(lm(f_full, data=d))$r.squared -
+               summary(lm(f_base, data=d))$r.squared,
+    n        = nrow(d)
+  )
+}
+
+VQ_t1 <- delta_R2(dat_sheet[dat_sheet$cog_bin==1,], qalb_var, "inflam_score")
+VQ_t2 <- delta_R2(dat_sheet[dat_sheet$cog_bin==2,], qalb_var, "inflam_score")
+VK_t1 <- delta_R2(dat_sheet[dat_sheet$cog_bin==1,], ktrans_var, "mri_score")
+VK_t2 <- delta_R2(dat_sheet[dat_sheet$cog_bin==2,], ktrans_var, "mri_score")
+
+VQ_tertiles <- lapply(levels(dat_sheet$cog_tertile), function(lvl) {
+  res <- delta_R2(
+    dat_sheet[!is.na(dat_sheet$cog_tertile) & dat_sheet$cog_tertile==lvl, ],
+    qalb_var, "inflam_score")
+  data.frame(tertile=lvl, delta_R2=res$delta_R2, n=res$n)
+}) |> do.call(rbind, args=_)
+
+boot_delta_R2 <- function(data, outcome, score,
+                          covariates=c("age","sex","dx_current"),
+                          B=1000, seed=42) {
+  set.seed(seed)
+  needed <- c(outcome, score, covariates)
+  d <- data[stats::complete.cases(data[, needed, drop=FALSE]), ]
+  if (nrow(d) < 10) return(rep(NA_real_, B))
+  out <- numeric(B)
+  for (b in seq_len(B)) {
+    idx <- sample(seq_len(nrow(d)), replace=TRUE)
+    db  <- d[idx, , drop=FALSE]
+    f_base <- as.formula(paste(outcome,"~",paste(covariates, collapse=" + ")))
+    f_full <- as.formula(paste(outcome,"~",
+                paste(c(covariates,score), collapse=" + ")))
+    out[b] <- summary(lm(f_full, data=db))$r.squared -
+              summary(lm(f_base, data=db))$r.squared
+  }
+  out
+}
+ci95 <- function(x) { x <- x[is.finite(x)]; quantile(x, c(0.025, 0.975)) }
+
+boot_VQ_t1 <- boot_delta_R2(dat_sheet[dat_sheet$cog_bin==1,],
+                            qalb_var, "inflam_score")
+boot_VQ_t2 <- boot_delta_R2(dat_sheet[dat_sheet$cog_bin==2,],
+                            qalb_var, "inflam_score")
+boot_VK_t1 <- boot_delta_R2(dat_sheet[dat_sheet$cog_bin==1,],
+                            ktrans_var, "mri_score")
+boot_VK_t2 <- boot_delta_R2(dat_sheet[dat_sheet$cog_bin==2,],
+                            ktrans_var, "mri_score")
+
+mod_alpha <- lm(as.formula(paste(qalb_var,
+  "~ age + sex + dx_current + inflam_score * overall_cog_z")), data=dat_sheet)
+mod_beta  <- lm(as.formula(paste(ktrans_var,
+  "~ age + sex + dx_current + mri_score * overall_cog_z")), data=dat_sheet)
+mod_gamma <- lm(as.formula(paste(qalb_var,
+  "~ age + sex + dx_current + mri_score")), data=dat_sheet)
+mod_delta_lm <- lm(as.formula(paste(ktrans_var,
+  "~ age + sex + dx_current + inflam_score")), data=dat_sheet)
+
+alpha_row <- broom::tidy(mod_alpha) |>
+  dplyr::filter(term=="inflam_score:overall_cog_z")
+beta_row  <- broom::tidy(mod_beta) |>
+  dplyr::filter(term=="mri_score:overall_cog_z")
+gamma_row <- broom::tidy(mod_gamma) |>
+  dplyr::filter(term=="mri_score")
+delta_row <- broom::tidy(mod_delta_lm) |>
+  dplyr::filter(term=="inflam_score")
+inflam_main <- broom::tidy(mod_alpha) |>
+  dplyr::filter(term=="inflam_score")
+
+both_avail <- !is.na(dat_sheet[[qalb_var]]) & !is.na(dat_sheet[[ktrans_var]])
+cor_QK <- cor(dat_sheet[[qalb_var]][both_avail],
+              dat_sheet[[ktrans_var]][both_avail])
+n_QK <- sum(both_avail)
+```
+
+# Abstract {.unnumbered}
+
+Blood-brain barrier (BBB) permeability can be measured in different ways. In this project, we focused on two measures: the albumin index, Qalb, which reflects global leakage of albumin from blood into cerebrospinal fluid, and dynamic contrast-enhanced MRI, Ktrans, which measures regional leakage of a small gadolinium tracer. Although both measures are related to BBB permeability, they were only weakly correlated in our cohort. This suggests that they may capture different aspects of BBB biology.
+
+We used a simple two-state conceptual framework to describe these two pathways. In this framework, $V_Q$ represents the amount of Qalb variance explained by inflammatory biomarkers, and $V_K$ represents the amount of Ktrans variance explained by white-matter injury markers. We then examined how these quantities changed across cognition-defined severity groups in 149 participants from a memory-aging and vascular cognitive impairment cohort.
+
+The inflammatory pathway showed a descriptive increase with worse cognition: $V_Q$ increased from 0.012 in the higher-cognition group to 0.049 in the lower-cognition group, and reached 0.099 in the worst-cognition tertile. In contrast, $V_K$ remained close to zero across cognition groups. Cross-pathway regression checks were small and not statistically significant ($p = 0.23$ for structural injury predicting Qalb; $p = 0.95$ for inflammation predicting Ktrans), and the continuous inflammation-by-cognition interaction was also not significant ($p = 0.72$).
+
+Overall, the results suggest little evidence for cross-pathway coupling, although the matrix parameters were not directly estimated. The structural pathway showed little explanatory power in both cognition groups, and we found no evidence that this relationship changed with cognition. The tertile pattern is consistent with a possible threshold-like or sigmoidal change in the inflammatory pathway, but this interpretation should be treated as exploratory.
+
+\newpage
+
+# Introduction
+
+## BBB disruption is central to dementia pathophysiology
+
+Alzheimer's disease (AD) and related dementias (ADRD) are an important
+cause of neurological disease driven by the aging of populations
+worldwide [1, 2]. One of the main theories of dementia pathophysiology
+is that the blood-brain barrier (BBB) is disrupted, contributing to the
+molecular cascade that leads to cell death. This theory is based on
+studies of vascular permeability using two main methods: a
+contrast-based MRI method called dynamic contrast-enhanced MRI (DCEMRI)
+that quantifies regional transfer (Ktrans), and the albumin index (Qalb)
+formed by the ratio of CSF albumin to plasma albumin. Opening of the BBB
+has been shown in AD and in vascular cognitive impairment and dementia
+(VCID) [3–7], with mixed dementia (AD plus VCID) being the most common
+form at autopsy [8, 9].
+
+## Two measures of permeability that do not agree
+
+Although both methods are thought to measure features of vascular
+permeability, there are essential differences between them. Albumin is
+a large molecule of over 66 kDa that is present in low concentration in
+CSF and increases when there is global leakage. In contrast, gadolinium
+(Gd) is a small molecule with a molecular weight of 157 Da that can
+show regional permeability on MRI. In our prior work and replicated
+here, the two measures are only weakly correlated within the same
+participants, suggesting they capture distinct aspects of BBB injury rather
+than redundant information. As part of the NIH MarkVCID consortium and
+the New Mexico Alzheimer's Disease Research Center (ADRC) program, our
+group has collected both Qalb and Ktrans on the same participants, together
+with proteases, angiogenic growth factors, and cytokines in CSF and
+blood [10]. We have observed elsewhere that Qalb is most strongly
+associated with inflammatory biomarkers in CSF (cytokines, MMPs,
+angiogenic factors), whereas Ktrans is most strongly associated with
+diffusion-based markers of white-matter injury such as the peak width of
+skeletonized mean diffusivity (PSMD) and mean free water. The two BBB
+measures therefore appear to index two distinct pathways: an
+inflammatory leakage pathway, indexed by Qalb, and a structural injury
+pathway, indexed by Ktrans. In the present analysis, however, this structural pathway is treated cautiously because the structural composite explained only a small amount of additional Ktrans variance.
+
+## Hypothesis
+
+Building on this two-pathway framework, we asked a more focused question: as cognition declines, does inflammation become increasingly important for explaining BBB integrity, while the structural injury pathway shows little cognition-dependent change? In the model below, this idea is represented conceptually by an inflammation amplification parameter, $\alpha$, which would be larger when the inflammatory pathway becomes more influential at lower cognitive performance. In contrast, little change in the structural pathway would suggest no detectable cognition-dependent amplification of the Ktrans-related structural pathway. These parameters are used as interpretive labels rather than directly estimated transition parameters.
+
+## A two-state conceptual model
+
+We describe this question using a simple two-state conceptual model that organizes how each pathway changes across cognition-defined severity groups. The first state, $V_Q(t)$, represents how much of the variation in Qalb is explained by inflammatory biomarkers in cognitive-severity group $t$. The second state, $V_K(t)$, represents how much of the variation in Ktrans is explained by white-matter injury markers in the same group. Together, these two quantities allow us to track whether the inflammatory and structural pathways appear stronger, weaker, or relatively unchanged as cognitive performance worsens. Conceptually, these changes can be represented using a $2 \times 2$ transition-like matrix:
+
+$$
+\begin{bmatrix} V_Q(t+1) \\ V_K(t+1) \end{bmatrix} =
+\begin{bmatrix} \alpha & \gamma \\ \delta & \beta \end{bmatrix}
+\begin{bmatrix} V_Q(t) \\ V_K(t) \end{bmatrix} +
+\begin{bmatrix} \varphi_Q(t) \\ \varphi_K(t) \end{bmatrix}.
+$$
+
+Each part of the matrix has a biological meaning. The parameter $\alpha$ describes whether the inflammatory pathway appears stronger across cognitive-severity groups, while $\beta$ describes whether the white-matter injury pathway shows a similar pattern. The cross-pathway terms capture possible spillover between the two processes: $\gamma$ represents whether white-matter injury contributes to Qalb, and $\delta$ represents whether inflammation contributes to Ktrans. Finally, $\varphi_Q(t)$ and $\varphi_K(t)$ represent external inputs that may increase with age or disease progression.
+
+## Conceptual rather than dynamical fit
+
+We do not estimate $\alpha$, $\beta$, $\gamma$, and $\delta$ as fully fitted dynamical parameters. Because our data are cross-sectional, a true dynamic model would require following the same participants over time, which is not available in this dataset. Instead, we estimate $V_Q$ and $V_K$ within cognitive-severity groups and use the observed regression patterns to interpret the matrix terms cautiously. In this sense, the matrix is not a separate statistical model, and the regression coefficients below are not direct estimates of the transition parameters. Rather, the matrix serves as a conceptual framework that helps organize and interpret the results.
+
+# Materials and Methods
+
+## Participants
+
+The study was approved by the University of New Mexico Human Research
+Review Committee, and all patients gave informed consent. Participants were
+recruited from the Neurology and Center for Memory and Aging clinics at
+the University of New Mexico Hospital and the memory clinic at the
+Albuquerque Veterans Administration Hospital. All subjects were at
+least 50 years old. The sample comprised
+`r nrow(dat_sheet)` participants, with diagnoses assigned by consensus of
+three study neurologists into five groups: Alzheimer's disease (AD,
+$n$ = 26), leukoaraiosis (LA, $n$ = 29), mixed dementia (Mixed,
+$n$ = 22), subcortical ischemic vascular dementia (SIVD, $n$ = 53),
+and a myocardial infarction control group (MI, $n$ = 19). LA designated
+participants with significant white matter hyperintensities on FLAIR
+MRI but with minimal cognitive or neurological impairment.
+
+## Cognitive assessment
+
+Participants underwent a battery of in-person neuropsychological tests
+administered by trained research coordinators. The tests covered four
+cognitive domains used here — memory (Craft story delayed recall,
+Benson complex figure recall, HVLT delayed recall), executive function
+(trails B time to finish, digit span backward, F-words), language
+(MINT and semantic fluency), and attention (digit span forward and
+trails A). Each test was scored and an age-adjusted T-score was
+calculated. To compute a domain composite, T-scores within each domain
+were averaged. The overall cognition score (`overall_cog_z`) was the
+row-mean of the four domain composites, then z-scored across the
+sample. Higher values indicate better cognition; lower values indicate
+lower cognitive performance.
+
+## BBB outcomes
+
+Two complementary measures of BBB permeability were used. The albumin
+index (Qalb), the ratio of CSF to plasma albumin, indexes global BBB
+leakage to a large (~66 kDa) molecule. DCEMRI permeability (Ktrans)
+indexes regional vessel-level transfer of a small (~157 Da)
+gadolinium-based contrast agent into white matter [5, 7]. CSF and
+plasma samples were collected during the same participant visit and
+processed as previously described, and the imaging protocol followed
+the procedures established in our previous work. Both Qalb and Ktrans
+were log2-transformed prior to analysis, with a small offset where
+needed to avoid skew artefacts.
+
+## Inflammatory biomarkers (composite predictor for Qalb)
+
+As part of the MarkVCID consortium, MesoScale Discovery (MSD)
+multiplex assays were used to measure matrix metalloproteinases
+(MMP-1, MMP-2, MMP-3, MMP-9, MMP-10), angiogenic growth factors
+(VEGF-A, VEGF-C, VEGF-D, PlGF, Flt-1, Tie-2, bFGF), and pro-inflammatory
+cytokines (IFN-$\gamma$, IL-1$\beta$, IL-2, IL-4, IL-6, IL-8, IL-10,
+IL-12p70, IL-13, TNF-$\alpha$). All CSF samples were run undiluted
+and all data were expressed as pg/mL. Twenty-two CSF biomarkers across
+these three classes were available for the present analysis. To avoid
+overfitting at the modest sample size, the inflammatory composite
+score (`inflam_score`) was constructed as the row-mean of the
+participant's available z-scored CSF biomarkers across all three classes;
+higher values indicate higher overall CSF inflammatory burden.
+
+## White-matter injury markers (composite predictor for Ktrans)
+
+White-matter injury was indexed by four MRI-derived markers: PSMD,
+mean free water, mean cortical thickness, and percent hippocampal
+volume. PSMD and mean free water were calculated using the
+MarkVCID-adopted pipeline [10, 11]. Because PSMD and free water
+*increase* with white-matter injury whereas cortical thickness and
+hippocampal volume *decrease* with neurodegeneration, the signs of
+the latter two were reversed prior to averaging so that all four
+markers point in a consistent direction. The structural composite
+score (`mri_score`) was the row-mean of the four available z-scored
+markers; higher values indicate greater overall structural injury.
+
+## Two-pathway conceptual model and cognitive-severity bins
+
+Because this study is cross-sectional, we cannot observe each participant moving through a disease process over time. Instead, we used each participant’s overall cognitive performance as an approximate marker of cognitive severity. The variable `overall_cog_z` summarizes cognition across four domains — memory, executive function, language, and attention — and then standardizes that overall score across the sample. Higher `overall_cog_z` values indicate better cognition, while lower values indicate worse cognition.
+
+We used this cognitive score to create ordered cognitive-severity groups. First, we used a median split to separate participants into a higher-cognition group ($t = 1$) and a lower-cognition group ($t = 2$). Although each bin initially contained approximately 73 participants, the sample size for each regression was smaller after requiring complete data for the outcome, pathway score, age, sex, and diagnosis.
+
+Second, we used tertiles of `overall_cog_z` to create three ordered groups from best to worst cognition ($t = 1, 2, 3$). This tertile split was used only for the detailed Qalb analysis, where we wanted to see whether the inflammatory pattern changed gradually across cognition or appeared mainly at the worst stage.
+
+## State-variable estimation: $V_Q$ and $V_K$
+
+Within each cognitive-severity group, we measured how much additional variance each pathway explained beyond basic clinical and demographic information. To do this, we compared two regression models. 
+The baseline model included age, sex, and diagnosis, while the full model added the pathway score of interest.
+
+The difference in $R^2$ between these two models, $\Delta R^2$, represents the extra explanatory value of that pathway within a given cognitive bin.
+We define $V_Q(t)$ as the $\Delta R^2$ for inflam_score predicting Qalb, and $V_K(t)$ as the $\Delta R^2$ for mri_score predicting Ktrans. 
+In other words, each state variable represents the amount of variance explained by the pathway score after accounting for age, sex, and diagnostic group.
+
+## Bootstrap confidence intervals
+
+Because each cognitive bin included a relatively small number of participants, approximately 30–60 per bin, we used bootstrap resampling to estimate uncertainty around the $\Delta R^2$ values. 
+Specifically, we resampled participants with replacement 1000 times and recalculated $\Delta R^2$ in each resample to obtain 95% confidence intervals.
+
+These intervals were used to guide interpretation.
+When the confidence intervals for two bins overlap substantially, we treat the apparent difference between those bins cautiously and avoid over-interpreting it as a strong stage-related change.
+
+## Continuous interaction tests
+
+The bin-based analysis was used mainly to describe the pattern across cognition-defined severity groups. For formal statistical testing, we treated cognition as a continuous variable rather than dividing it into groups. This allowed us to test whether the relationship between each pathway score and its outcome changed as cognition declined.
+
+Specifically, we fit the following interaction model:
+$$
+\text{Qalb} \sim \text{age} + \text{sex} + \text{diagnosis} +
+\text{inflam\_score} \times \text{overall\_cog\_z}
+$$
+as an approximate empirical check for inflammation-related amplification. We fit the analogous Ktrans model with
+`mri_score` as an approximate check for cognition-dependent change in the structural pathway. A negative
+`inflam_score:overall_cog_z` coefficient would mean inflammation
+matters more at lower cognition.
+
+## Cross-pathway regressions ($\gamma, \delta$)
+
+To examine possible cross-pathway effects, we also tested whether each score predicted the “opposite” outcome.
+Specifically, we used mri_score to predict Qalb as an empirical check for a possible $\gamma$-like cross-pathway effect, and inflam_score to predict Ktrans as an empirical check for a possible $\delta$-like cross-pathway effect.
+These models ask whether white-matter injury may help explain Qalb, or whether inflammation may help explain Ktrans. Both regressions were adjusted for age, sex, and diagnosis.
+
+## Software
+
+All analyses were performed in R using base R, `dplyr`, `broom`, and
+`ggplot2`; full code is provided in Appendix B.
+
+# Results
+
+## Sample composition and biomarker availability
+
+Of `r nrow(dat_sheet)` participants,
+`r sum(!is.na(dat_sheet$inflam_score))` had a complete CSF
+inflammatory composite and `r sum(!is.na(dat_sheet$mri_score))`
+had a complete MRI structural composite;
+`r n_QK` participants had both Qalb and Ktrans measured. The cognition
+score was available for `r sum(!is.na(dat_sheet$overall_cog_z))`
+participants, spanning approximately $-2.2$ to $+2.1$ standard deviations.
+
+## Qalb and Ktrans are only weakly correlated
+
+In this sample, the two BBB outcomes were only weakly correlated ($r = `r sprintf("%.2f", cor_QK)`, \mathrm{n} = `r n_QK`$). This supports the idea that Qalb and Ktrans reflect partly different aspects of BBB biology. Because they do not strongly track together, it is reasonable to treat them as separate state variables in the conceptual framework.
+
+## $V_Q$ is higher in the lower-cognition group (median split)
+
+In the higher-cognition group, the inflammatory composite explained 1.2% of the variance in Qalb after accounting for age, sex, and diagnostic group ($V_Q(t = 1) = 0.012$, $\mathrm{n} = 57$). In the lower-cognition group, it explained 4.9% of the variance ($V_Q(t = 2) = 0.049$, $\mathrm{n} = 62$). This represents an approximately four-fold relative increase, although the absolute amount of additional variance explained remained modest.
+
+This pattern is descriptively consistent with an $\alpha$-like amplification pattern, suggesting that the inflammatory pathway may become more explanatory as cognitive impairment becomes more severe. However, because the bootstrap intervals overlap substantially and the continuous interaction test was not significant, this should be interpreted as a descriptive pattern rather than confirmed amplification.
+
+## A non-monotonic tertile pattern
+
+```{r tertile-table}
+tt <- VQ_tertiles
+tt$tertile <- c("1 (best cognition)","2 (middle)","3 (worst cognition)")
+names(tt) <- c("Tertile","$\\Delta R^2$ (=$V_Q$)","n")
+tt[,2] <- round(tt[,2], 3)
+knitr::kable(tt,
+  caption="Inflammation $\\to$ Qalb explanatory power across cognition tertiles",
+  booktabs=TRUE)
+```
+
+When we divided participants into tertiles rather than two groups, $V_Q$ did not increase in a simple step-by-step pattern across cognitive-severity groups. Instead, it was `r sprintf("%.3f", VQ_tertiles$delta_R2[1])` in the best-cognition tertile, decreased to `r sprintf("%.3f", VQ_tertiles$delta_R2[2])` in the middle tertile, and then increased sharply to `r sprintf("%.3f", VQ_tertiles$delta_R2[3])` in the worst-cognition tertile.
+
+This pattern suggests that the inflammatory pathway may not gradually strengthen across the full cognitive-severity spectrum. Rather, it may become much more explanatory only in the worst-cognition group. However, because the tertile groups are relatively small and the bootstrap confidence intervals are wide, this threshold-like interpretation should be treated cautiously.
+
+## $V_K$ is small in both cognition groups
+
+The structural composite explained only `r sprintf("%.1f", VK_t1$delta_R2*100)`% of the variance in Ktrans in the higher-cognition group ($V_K(t = 1) = `r sprintf("%.3f", VK_t1$delta_R2)`, \mathrm{n} = `r VK_t1$n`$) and `r sprintf("%.1f", VK_t2$delta_R2*100)`% in the lower-cognition group ($V_K(t = 2) = `r sprintf("%.3f", VK_t2$delta_R2)`, \mathrm{n} = `r VK_t2$n`$).
+
+Overall, both values were small, and the slight decrease in the lower-cognition group is likely within sampling variability. Conceptually, this pattern is compatible with a stable structural pathway, but $\beta$ was not directly estimated.
+
+
+## Bootstrap confidence intervals are wide
+
+```{r boot-table}
+boot_summary <- data.frame(
+  State = c("$V_Q(t=1)$","$V_Q(t=2)$","$V_K(t=1)$","$V_K(t=2)$"),
+  `Point estimate` = round(c(VQ_t1$delta_R2, VQ_t2$delta_R2,
+                              VK_t1$delta_R2, VK_t2$delta_R2), 3),
+  `95% CI` = c(
+    sprintf("[%.3f, %.3f]", ci95(boot_VQ_t1)[1], ci95(boot_VQ_t1)[2]),
+    sprintf("[%.3f, %.3f]", ci95(boot_VQ_t2)[1], ci95(boot_VQ_t2)[2]),
+    sprintf("[%.3f, %.3f]", ci95(boot_VK_t1)[1], ci95(boot_VK_t1)[2]),
+    sprintf("[%.3f, %.3f]", ci95(boot_VK_t2)[1], ci95(boot_VK_t2)[2])
+  ),
+  check.names=FALSE
+)
+knitr::kable(boot_summary,
+  caption="State-variable point estimates and 95\\% bootstrap confidence intervals",
+  booktabs=TRUE)
+```
+
+The 95% bootstrap confidence intervals overlapped substantially across cognitive bins for both pathways. 
+Therefore, although the point estimates were in the expected direction, the median-split analysis should be interpreted as descriptive rather than definitive. By itself, it cannot clearly separate the observed increase in $V_Q$ from sampling variability. For this reason, the continuous interaction model below provides the main inferential test.
+
+## Continuous interaction test for $\alpha$ is not significant
+
+The full regression of Qalb on age, sex, diagnosis, and the
+`inflam_score` $\times$ `overall_cog_z` interaction was significant
+overall ($R^2$ = 0.22; $F$-test $p$ = 0.001). Inflammation showed a
+strong main effect on Qalb ($b$ = `r round(inflam_main$estimate, 2)`,
+$p$ = `r round(inflam_main$p.value, 3)`), confirming that higher
+inflammatory burden is associated with greater BBB leakage; this is
+consistent with our observations elsewhere that Qalb is the
+inflammation-tracking BBB measure. The interaction term, however, was
+not significant ($b$ = `r round(alpha_row$estimate, 3)`,
+$p$ = `r round(alpha_row$p.value, 3)`); the coefficient was negative
+(the direction expected under an $\alpha$-like amplification pattern) but well within sampling
+variability.
+
+## Continuous interaction test for $\beta$ is not significant
+
+For the structural pathway, the interaction between `mri_score` and `overall_cog_z` was also not significant ($b = `r sprintf("%.3f", beta_row$estimate)`, $p = `r sprintf("%.3f", beta_row$p.value)`$). This provides no evidence that the relationship between structural injury and Ktrans changes across cognitive severity.
+
+In contrast to the inflammatory pathway, where the pattern suggested possible amplification but with limited statistical support, the structural pathway showed an interaction coefficient that was essentially zero. This provides no detectable evidence that the structural pathway became more explanatory at worse cognitive performance. The result is compatible with a stable structural pathway, but $\beta$ was not directly estimated.
+
+## Cross-pathway empirical checks are not significant
+
+In the cross-pathway analyses, we did not find evidence that either pathway was associated with the opposite BBB outcome after adjustment for age, sex, and diagnosis. Specifically, `mri_score` did not predict Qalb ($b = `r sprintf("%.3f", gamma_row$estimate)`, $p = `r sprintf("%.3f", gamma_row$p.value)`$), and `inflam_score` did not predict Ktrans ($b = `r sprintf("%.3f", delta_row$estimate)`, $p = `r sprintf("%.3f", delta_row$p.value)`$).
+
+Both cross-pathway effects were small and not statistically different from zero. Within the limits of these summary scores and the available sample size, this provides little empirical support for cross-pathway coupling. In practical terms, we did not detect clear cross-coupling between the inflammatory and structural pathways.
+
+
+## Visualization of the inflammation–Qalb relationship by cognition group
+
+```{r plot-alpha, fig.cap="Inflammatory composite predicts Qalb in both cognition groups; the slope tilts with cognition but the bands overlap heavily.", fig.height=3.5}
+plot_data <- dat_sheet |>
+  dplyr::filter(!is.na(.data[[qalb_var]]),
+                !is.na(inflam_score),
+                !is.na(overall_cog_z)) |>
+  dplyr::mutate(
+    cog_group = ifelse(overall_cog_z >= median(overall_cog_z, na.rm=TRUE),
+                       "High cognition (t=1)","Low cognition (t=2)"))
+
+ggplot(plot_data, aes(x=inflam_score, y=.data[[qalb_var]], color=cog_group)) +
+  geom_point(alpha=0.5, size=1.8) +
+  geom_smooth(method="lm", se=TRUE) +
+  scale_color_manual(values=c("High cognition (t=1)"="#1D9E75",
+                              "Low cognition (t=2)"="#D85A30")) +
+  labs(x="Inflammatory composite score",
+       y="Qalb (log2 albumin index)", color=NULL) +
+  theme_minimal(base_size=10) + theme(legend.position="bottom")
+```
+
+The visualization is broadly consistent with the regression results. In both cognition groups, higher inflammatory composite scores are associated with higher Qalb, suggesting a positive inflammation–BBB leakage relationship. The lower-cognition group shows a descriptively stronger pattern, but the confidence bands overlap substantially, so the figure does not provide clear visual evidence that the slope differs by cognition group.
+
+Overall, the plot supports the main effect of inflammation on Qalb more clearly than it supports amplification across cognitive severity. Thus, the pattern is compatible with an $\alpha$-like amplification idea, but it should be interpreted as descriptive rather than statistically established.
+
+## Summary table mapping results onto the matrix
+
+```{r results-summary}
+results_summary <- data.frame(
+  Parameter = c("$\\alpha$","$\\beta$","$\\gamma$","$\\delta$"),
+  `Bin-based descriptive evidence` = c(
+    sprintf("$V_Q$: %.3f $\\to$ %.3f", VQ_t1$delta_R2, VQ_t2$delta_R2),
+    sprintf("$V_K$: %.3f $\\to$ %.3f", VK_t1$delta_R2, VK_t2$delta_R2),
+    "(see continuous test)",
+    "(see continuous test)"
+  ),
+  `Continuous test` = c(
+    sprintf("$b$=%.3f, $p$=%.3f", alpha_row$estimate, alpha_row$p.value),
+    sprintf("$b$=%.3f, $p$=%.3f", beta_row$estimate,  beta_row$p.value),
+    sprintf("$b$=%.3f, $p$=%.3f", gamma_row$estimate, gamma_row$p.value),
+    sprintf("$b$=%.3f, $p$=%.3f", delta_row$estimate, delta_row$p.value)
+  ),
+  Interpretation = c(
+    "Direction consistent with $\\alpha$-like amplification; not significant",
+    "No detectable cognition-dependent structural amplification; $\\beta$ not directly estimated",
+    "No detectable $\\gamma$-like coupling",
+    "No detectable $\\delta$-like coupling"
+  ),
+  check.names=FALSE
+)
+knitr::kable(results_summary,
+  caption="Mapping regression results onto the conceptual matrix parameters",
+  booktabs=TRUE, escape=FALSE)
+```
+
+# Discussion
+
+## Two pathways with weak evidence of cross-pathway coupling
+
+Overall, the results point to three main ideas. First, inflammation was associated with Qalb in the full sample. Its explanatory power looked higher in participants with worse cognition, but this increase was not statistically confirmed.
+
+Second, the structural pathway did not become stronger as cognition worsened. More specifically, the structural composite explained little additional Ktrans variance in both cognition groups, and the interaction model provided no evidence that this relationship changed with cognition. This is compatible with a stable structural pathway, but $\beta$ was not directly estimated.
+
+Third, we did not detect clear cross-pathway effects. The structural injury score did not predict Qalb, and the inflammatory score did not predict Ktrans. Together, these findings suggest little support for cross-pathway coupling in the conceptual matrix:
+$$
+\begin{bmatrix} V_Q(t+1) \\ V_K(t+1) \end{bmatrix} \approx
+\begin{bmatrix} \alpha(t) & \text{small or undetected} \\ \text{small or undetected} & \beta \end{bmatrix}
+\begin{bmatrix} V_Q(t) \\ V_K(t) \end{bmatrix} +
+\begin{bmatrix} \varphi_Q(t) \\ \varphi_K(t) \end{bmatrix},
+$$
+with $\alpha(t)$ written as a function of cognitive severity to show the *possibility* of state-dependence, not to claim that it has been proven. The notation is conceptual; these matrix parameters were not directly estimated.
+
+## Inflammatory and structural BBB pathways show little detectable coupling
+
+The lack of detectable cross-pathway effects is consistent with the weak correlation between Qalb and Ktrans ($r = 0.20$). This supports the idea that the two BBB measures are capturing partly different biological processes.
+
+Biologically, this makes sense. Qalb reflects leakage of albumin, a relatively large molecule that may cross the endothelium through inflammatory or vascular mechanisms such as transendothelial pinocytosis. Ktrans, by contrast, reflects regional permeability to gadolinium, a much smaller tracer that can pass through tight-junction disruption more easily.
+
+Therefore, the model supports a cautious parallel-pathway interpretation: Qalb appears to track an inflammation-related leakage process, while Ktrans may reflect structural injury to the cerebral microvasculature. In this dataset, one pathway does not clearly drive the other. However, because the structural composite explained little additional Ktrans variance in the staged analysis, the Ktrans structural pathway should be interpreted cautiously in this project.
+
+## On linearity
+
+The matrix framework is linear as written: each future state is represented as a weighted combination of the current states, with $\varphi_Q(t)$ and $\varphi_K(t)$ treated as external inputs. Our data do not rule out this linear structure. However, the tertile results suggest that the inflammatory input, $\varphi_Q(t)$, may not increase smoothly across cognition-severity groups.
+
+In the tertile analysis, $V_Q$ followed a non-monotonic pattern:
+
+`r sprintf("%.3f", VQ_tertiles$delta_R2[1])` $\to$
+`r sprintf("%.3f", VQ_tertiles$delta_R2[2])` $\to$
+`r sprintf("%.3f", VQ_tertiles$delta_R2[3])`
+
+This pattern is more consistent with a possible threshold-like change, where inflammation becomes more explanatory only in the worst-cognition group. This idea is also compatible with nonlinear or bistable models of AD-related signaling, such as the framework described by Proctor and Gray (2010) [14].
+
+However, this should be treated as hypothesis-generating. The linear interaction was not significant, the tertile confidence intervals were wide, and a true threshold effect would need to be tested with a different model, such as a “worst tertile versus rest” interaction or a regression spline.
+
+## Limitations
+
+Several limitations should be kept in mind. First, this was a single-center cohort, so the findings may not fully generalize to other populations. Second, the analysis was cross-sectional. The cognitive bins are used as an approximate “pseudo-time” axis, but they do not follow the same participants over time.
+
+Third, the sample sizes within bins were modest, so the bootstrap confidence intervals were wide. This makes it difficult to separate a true threshold pattern from sampling variability.
+
+Fourth, the structural composite combined different types of MRI markers, including PSMD, free water, cortical thickness, and hippocampal volume. Even though the directions were harmonized, these markers may reflect different stages or types of brain injury. A single composite may therefore smooth over important differences.
+
+Fifth, the inflammatory composite assumes that all CSF inflammatory biomarkers contribute in the same direction and with equal weight. This helped reduce overfitting, but it may obscure marker-specific effects.
+
+Sixth, the biomarker set was limited to markers available from the MarkVCID MSD assay system. Newer platforms such as Quanterix SIMOA or Olink may detect additional inflammatory or vascular signals that were not captured here.
+
+Finally, the matrix should be interpreted as a conceptual framework, not as a fully fitted dynamical model. The parameters $\alpha$, $\beta$, $\gamma$, and $\delta$ were interpreted from regression patterns rather than estimated directly as longitudinal dynamic parameters.
+
+# Conclusion
+
+In this cohort, the inflammatory and structural BBB pathways appear to operate mostly in parallel. Inflammation was clearly associated with Qalb, and its explanatory power appeared higher in the worst-cognition group, although this pattern was descriptive and not statistically confirmed. The structural pathway showed little explanatory power and no clear amplification as cognition worsened.
+
+Overall, the data are best summarized by a conceptual matrix with little detected cross-pathway coupling. In this framework, the structural pathway showed no detectable cognition-dependent amplification, while the inflammatory pathway may be state-dependent, with possible strengthening at more severe cognitive impairment. This hypothesis should be tested in future longitudinal work, ideally using a nonlinear or sigmoidal form for the inflammatory input term, $\varphi_Q(t)$.
+
+# References {.unnumbered}
+
+1. Snyder HM, Corriveau RA, Craft S, et al. Vascular contributions to
+   cognitive impairment and dementia including Alzheimer's disease.
+   *Alzheimer's & Dementia* 2015; 11: 710–717.
+
+2. Gorelick PB, Scuteri A, Black SE, et al. Vascular contributions to
+   cognitive impairment and dementia: a statement for healthcare
+   professionals from the American Heart Association/American Stroke
+   Association. *Stroke* 2011; 42: 2672–2713.
+
+3. Wallin A, Blennow K, Fredman P, et al. Blood-brain barrier function
+   in vascular dementia. *Acta Neurol Scand* 1990; 81: 318–322.
+
+4. Taheri S, Gasparovic C, Huisa BN, et al. Blood-brain barrier
+   permeability abnormalities in vascular cognitive impairment.
+   *Stroke* 2011; 42: 2158–2163.
+
+5. Nation DA, Sweeney MD, Montagne A, et al. Blood-brain barrier
+   breakdown is an early biomarker of human cognitive dysfunction.
+   *Nature Medicine* 2019; 25: 270–276.
+
+6. Montagne A, Barnes SR, Sweeney MD, et al. Blood-brain barrier
+   breakdown in the aging human hippocampus. *Neuron* 2015; 85:
+   296–302.
+
+7. Huisa BN, Caprihan A, Thompson J, et al. Long-term blood-brain
+   barrier permeability changes in Binswanger Disease. *Stroke* 2015;
+   46: 2413–2418.
+
+8. Schneider JA, Arvanitakis Z, Bang W, et al. Mixed brain pathologies
+   account for most dementia cases in community-dwelling older
+   persons. *Neurology* 2007; 69: 2197–2204.
+
+9. Toledo JB, Arnold SE, Raible K, et al. Contribution of
+   cerebrovascular disease in autopsy-confirmed neurodegenerative
+   disease cases in the National Alzheimer's Coordinating Centre.
+   *Brain* 2013; 136: 2697–2706.
+
+10. Wilcock D, Jicha G, Blacker D, et al. MarkVCID cerebral small
+    vessel consortium: I. Enrollment, clinical, fluid protocols.
+    *Alzheimer's & Dementia* 2021; 17: 704–715.
+
+11. Lu H, Kashani AH, Arfanakis K, et al. MarkVCID cerebral small
+    vessel consortium: II. Neuroimaging protocols. *Alzheimer's &
+    Dementia* 2021; 17: 716–725.
+
+12. Rosenberg GA. Matrix metalloproteinases and their multiple roles
+    in neurodegenerative diseases. *Lancet Neurology* 2009; 8: 205–216.
+
+13. Edelstein-Keshet L, Spiros A. Exploring the formation of Alzheimer's
+    disease senile plaques in silico. *Journal of Theoretical Biology*
+    2002; 216: 301–326.
+
+14. Proctor CJ, Gray DA. GSK3 and p53 — do they play a role in
+    Alzheimer's disease? *Molecular Neurodegeneration* 2010; 5: 23.
+
+15. Vodovotz Y, Csete M, Bartels J, Chang S, An G. Translational systems
+    biology of inflammation. *PLoS Computational Biology* 2008; 4:
+    e1000014.
+
+\newpage
+
+# Appendix A: Variable definitions {.unnumbered}
+
+**Outcomes.** `fl_albumin_index_log2` (Qalb, log2-transformed albumin
+index); `mri_perm_3t_tot_log2` (Ktrans, log2-transformed DCE-MRI
+permeability).
+
+**CSF inflammatory biomarkers in `inflam_score`** (log2, z-scored):
+MMP-1, MMP-2, MMP-3, MMP-9, MMP-10; IFN-$\gamma$, IL-1$\beta$, IL-2,
+IL-4, IL-6, IL-8, IL-10, IL-12p70, IL-13, TNF-$\alpha$; bFGF, Flt-1,
+Tie-2, VEGF-A, VEGF-C, VEGF-D, PlGF.
+
+**MRI structural markers in `mri_score`** (z-scored; cortical thickness
+and hippocampal volume sign-flipped to align directionality): PSMD,
+mean free water, mean cortical thickness, percent hippocampal volume.
+
+**Cognitive-severity axis.** `overall_cog_z` = z-scored row-mean of four
+T-scores (executive, attention, memory, language).
+
+**Cognitive-severity bins.** Median split: $t = 1$ (cognition $\geq$ median),
+$t = 2$ (cognition $<$ median). Tertile split: $t = 1, 2, 3$ from best
+to worst cognition.
+
+\newpage
+
+# Appendix B: Code {.unnumbered}
+
+The full executable code for this project is reproduced below. All
+analyses were performed in R using base R, `dplyr`, `broom`, and
+`ggplot2`.
+
+## B.1 Setup and data preparation
+
+```{r show-setup, eval=FALSE, echo=TRUE}
+library(dplyr); library(broom); library(ggplot2); library(knitr)
+
+# Load the cleaned data
+load("dat_sub_Data_inflammation_analysis_paper_06052025.RData")
+load("dat_sub_and_Var_for_inflammation_analysis.RData")
+
+# Build a working data frame on a common (z-scored) scale
+dat_sheet <- dat_sub %>%
+  mutate(
+    across(all_of(c(Var$csf, Var$plasma, Var$mri)), scale),
+    across(all_of(c(Var$csf, Var$plasma, Var$mri)), as.numeric)
+  )
+
+# BBB outcomes
+qalb_var   <- "fl_albumin_index_log2"
+ktrans_var <- "mri_perm_3t_tot_log2"
+
+# CSF inflammatory biomarkers (already log2)
+inflam_vars <- c(
+  "fl_msd_csf_mmp_1_log2","fl_msd_csf_mmp_2_log2","fl_msd_csf_mmp_3_log2",
+  "fl_msd_csf_mmp_9_log2","fl_csf__ALL__mmp_10_log2",
+  "fl_cyto_csf_ifn_g_log2","fl_csf__ALL__il_1b_log2","fl_cyto_csf_il_2_log2",
+  "fl_cyto_csf_il_4_log2","fl_cyto_csf_il_6_log2","fl_cyto_csf_il_8_log2",
+  "fl_cyto_csf_il_10_log2","fl_cyto_csf_il_12p70_log2",
+  "fl_cyto_csf_il_13_log2","fl_cyto_csf_tnf_a_log2",
+  "fl_angio_csf_bfgf_log2","fl_angio_csf_flt_1_log2","fl_angio_csf_tie2_log2",
+  "fl_angio_csf_vegf_a_log2","fl_angio_csf_vegf_c_log2",
+  "fl_angio_csf_vegf_d_log2","fl_csf__ALL__plgf_log2"
+)
+inflam_vars <- inflam_vars[inflam_vars %in% names(dat_sheet)]
+
+# WM injury markers - directionality fix applied below
+wm_vars <- c("mri_dti_psmd","mri_dti_freewater_mean",
+             "mri_mean_cort_thick_mm","mri_percent_vol_hippo")
+wm_vars <- wm_vars[wm_vars %in% names(dat_sheet)]
+```
+
+## B.2 Composite scores and cognition axis
+
+```{r show-scores, eval=FALSE, echo=TRUE}
+# Cognition axis
+cog_components <- c("npsy_executive_t","npsy_attention_t",
+                    "npsy_memory_t","npsy_language_t")
+dat_sheet <- dat_sheet |>
+  mutate(
+    overall_cog   = rowMeans(across(all_of(cog_components)), na.rm=TRUE),
+    overall_cog_z = as.numeric(scale(overall_cog))
+  )
+
+# Inflammatory composite (already z-scored, so just take row-mean)
+dat_sheet$inflam_score <- rowMeans(dat_sheet[, inflam_vars], na.rm=TRUE)
+dat_sheet$inflam_score[is.nan(dat_sheet$inflam_score)] <- NA
+
+# WM composite - flip thickness/volume so all four markers align
+# (higher = more injury)
+dat_sheet$mri_mean_cort_thick_mm <- -dat_sheet$mri_mean_cort_thick_mm
+dat_sheet$mri_percent_vol_hippo  <- -dat_sheet$mri_percent_vol_hippo
+dat_sheet$mri_score <- rowMeans(dat_sheet[, wm_vars], na.rm=TRUE)
+dat_sheet$mri_score[is.nan(dat_sheet$mri_score)] <- NA
+
+# Cognition bins
+med_cog <- median(dat_sheet$overall_cog_z, na.rm=TRUE)
+dat_sheet$cog_bin <- ifelse(dat_sheet$overall_cog_z >= med_cog, 1L, 2L)
+
+ter_cuts <- quantile(dat_sheet$overall_cog_z,
+                     probs=c(0,1/3,2/3,1), na.rm=TRUE)
+dat_sheet$cog_tertile <- cut(dat_sheet$overall_cog_z,
+  breaks=ter_cuts, labels=c("3","2","1"), include.lowest=TRUE)
+dat_sheet$cog_tertile <- factor(dat_sheet$cog_tertile, levels=c("1","2","3"))
+```
+
+## B.3 $\Delta R^2$ helper and bin estimates
+
+```{r show-deltaR2, eval=FALSE, echo=TRUE}
+delta_R2 <- function(data, outcome, score,
+                     covariates = c("age","sex","dx_current")) {
+  needed <- c(outcome, score, covariates)
+  d <- data[complete.cases(data[, needed]), ]
+  if (nrow(d) < 10) return(list(delta_R2=NA_real_, n=nrow(d)))
+  f_base <- as.formula(paste(outcome,"~",paste(covariates, collapse=" + ")))
+  f_full <- as.formula(paste(outcome,"~",
+              paste(c(covariates, score), collapse=" + ")))
+  list(
+    delta_R2 = summary(lm(f_full, data=d))$r.squared -
+               summary(lm(f_base, data=d))$r.squared,
+    n        = nrow(d)
+  )
+}
+
+# V_Q across bins and tertiles
+VQ_t1 <- delta_R2(dat_sheet[dat_sheet$cog_bin==1,], qalb_var, "inflam_score")
+VQ_t2 <- delta_R2(dat_sheet[dat_sheet$cog_bin==2,], qalb_var, "inflam_score")
+VQ_tertiles <- lapply(levels(dat_sheet$cog_tertile), function(lvl) {
+  res <- delta_R2(
+    dat_sheet[!is.na(dat_sheet$cog_tertile) & dat_sheet$cog_tertile==lvl, ],
+    qalb_var, "inflam_score")
+  data.frame(tertile=lvl, delta_R2=res$delta_R2, n=res$n)
+}) |> do.call(rbind, args=_)
+
+# V_K across bins
+VK_t1 <- delta_R2(dat_sheet[dat_sheet$cog_bin==1,], ktrans_var, "mri_score")
+VK_t2 <- delta_R2(dat_sheet[dat_sheet$cog_bin==2,], ktrans_var, "mri_score")
+```
+
+## B.4 Bootstrap
+
+```{r show-boot, eval=FALSE, echo=TRUE}
+boot_delta_R2 <- function(data, outcome, score,
+                          covariates=c("age","sex","dx_current"),
+                          B=1000, seed=42) {
+  set.seed(seed)
+  d <- data[complete.cases(data[, c(outcome, score, covariates)]), ]
+  if (nrow(d) < 10) return(rep(NA_real_, B))
+  out <- numeric(B)
+  for (b in seq_len(B)) {
+    db <- d[sample(seq_len(nrow(d)), replace=TRUE), ]
+    f_base <- as.formula(paste(outcome,"~",paste(covariates, collapse=" + ")))
+    f_full <- as.formula(paste(outcome,"~",
+                paste(c(covariates,score), collapse=" + ")))
+    out[b] <- summary(lm(f_full, data=db))$r.squared -
+              summary(lm(f_base, data=db))$r.squared
+  }
+  out
+}
+ci95 <- function(x) quantile(x[is.finite(x)], c(0.025, 0.975))
+```
+
+## B.5 Continuous and cross-pathway tests
+
+```{r show-models, eval=FALSE, echo=TRUE}
+# alpha test
+mod_alpha <- lm(as.formula(paste(qalb_var,
+  "~ age + sex + dx_current + inflam_score * overall_cog_z")), data=dat_sheet)
+
+# beta test
+mod_beta  <- lm(as.formula(paste(ktrans_var,
+  "~ age + sex + dx_current + mri_score * overall_cog_z")),  data=dat_sheet)
+
+# gamma test (does WM injury predict Qalb?)
+mod_gamma <- lm(as.formula(paste(qalb_var,
+  "~ age + sex + dx_current + mri_score")), data=dat_sheet)
+
+# delta test (does inflammation predict Ktrans?)
+mod_delta <- lm(as.formula(paste(ktrans_var,
+  "~ age + sex + dx_current + inflam_score")), data=dat_sheet)
+```

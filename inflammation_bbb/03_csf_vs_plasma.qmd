@@ -1,0 +1,2339 @@
+---
+title:        "[CSF] ~ [Plasma] for all biomarkers, scatterplots colored by DX group"
+subtitle:     "Based on Erhardt, et al., (2021). *Inflammatory biomarkers aid in diagnosis of dementia Frontiers in Aging Neuroscience*"
+author:       Azadeh Golduzian
+date:         last-modified # today, now, last-modified
+date-format:  long          # full, long, medium, short, iso,   https://quarto.org/docs/reference/dates.html
+format:
+  html:
+    theme:                  litera
+    highlight-style:        atom-one
+    page-layout:            full      # article, full   # https://quarto.org/docs/output-formats/page-layout.html
+    toc:                    true
+    toc-depth:              4
+    toc-location:           body      # left, body, right
+    number-sections:        true      # true, false
+    number-depth:           3
+    code-fold:              show      # true (initially hidden), false, show (initially shown)
+    code-tools:                       # menu top-right to show/hide all code
+      toggle:               true
+      caption:              "Code"    # none
+      source:               false
+    code-overflow:          scroll    # scroll, wrap
+    code-block-bg:          true
+    code-block-border-left: "#30B0E0"
+    df-print:               paged     # default, kable, tibble, paged   # https://quarto.org/docs/computations/r.html
+fig-width:                  6
+fig-height:                 4
+execute: # https://quarto.org/docs/computations/execution-options.html, https://quarto.org/docs/computations/r.html
+  cache:    false   # false, true
+  eval:     true    # true, false  Evaluate the code chunk (if false, just echos the code into the output).
+  echo:     true    # true, false  Include the source code in output
+---
+
+# Azadeh code
+
+```{r}
+
+load("dat_sub_Data_inflammation_analysis_paper_06052025.RData")
+load("dat_sub_and_Var_for_inflammation_analysis.RData")
+
+
+# library(tidyverse)
+# library(ggplot2)
+# library(patchwork)
+# library(scales)
+
+dat_var_label_matching <-
+  tibble::tribble(
+    ~Var                                    , ~Group  , ~Type                          , ~Scale
+  #, "ptid"                                 ,         ,                                ,
+  #, "dx_current"                           ,         ,                                ,
+  #, "sex"                                  ,         ,                                ,
+  #, "demo_edu_yrs"                         ,         ,                                ,
+  #, "age"                                  ,         ,                                ,
+  ##### CSF                                 ,         ,                                ,
+  , "fl_albumin_index_log2"                 , "CSF"   , "CSF Permeability"             , "log2"
+  , "fl_igg_index_log2"                     , "CSF"   , "CSF Other"                    , "log2"
+  , "fl_csf_igg_log2"                       , "CSF"   , "CSF Other"                    , "log2"
+  , "fl_msd_csf_mmp_1_log2"                 , "CSF"   , "CSF MMP"                      , "log2"
+  , "fl_msd_csf_mmp_2_log2"                 , "CSF"   , "CSF MMP"                      , "log2"
+  , "fl_msd_csf_mmp_3_log2"                 , "CSF"   , "CSF MMP"                      , "log2"
+  , "fl_msd_csf_mmp_9_log2"                 , "CSF"   , "CSF MMP"                      , "log2"
+  , "fl_csf__ALL__mmp_10_log2"              , "CSF"   , "CSF MMP"                      , "log2"
+  , "fl_angio_csf_bfgf_log2"                , "CSF"   , "CSF Angio"       , "log2"
+  , "fl_angio_csf_flt_1_log2"               , "CSF"   , "CSF Angio"       , "log2"
+  , "fl_angio_csf_tie2_log2"                , "CSF"   , "CSF Angio"       , "log2"
+  , "fl_angio_csf_vegf_a_log2"              , "CSF"   , "CSF Angio"       , "log2"
+  , "fl_angio_csf_vegf_c_log2"              , "CSF"   , "CSF Angio"       , "log2"
+  , "fl_angio_csf_vegf_d_log2"              , "CSF"   , "CSF Angio"       , "log2"
+  , "fl_cyto_csf_ifn_g_log2"                , "CSF"   , "CSF Cytokines"                , "log2"
+  , "fl_csf__ALL__il_1b_log2"               , "CSF"   , "CSF Cytokines"                , "log2"
+  , "fl_cyto_csf_il_2_log2"                 , "CSF"   , "CSF Cytokines"                , "log2"
+  , "fl_cyto_csf_il_4_log2"                 , "CSF"   , "CSF Cytokines"                , "log2"
+  , "fl_cyto_csf_il_6_log2"                 , "CSF"   , "CSF Cytokines"                , "log2"
+  , "fl_cyto_csf_il_8_log2"                 , "CSF"   , "CSF Cytokines"                , "log2"
+  , "fl_cyto_csf_il_10_log2"                , "CSF"   , "CSF Cytokines"                , "log2"
+  , "fl_cyto_csf_il_12p70_log2"             , "CSF"   , "CSF Cytokines"                , "log2"
+  , "fl_cyto_csf_il_13_log2"                , "CSF"   , "CSF Cytokines"                , "log2"
+  , "fl_cyto_csf_tnf_a_log2"                , "CSF"   , "CSF Cytokines"                , "log2"
+  , "fl_csf__ALL__nfl_log2"                 , "CSF"   , "CSF Other"                    , "log2"
+  , "fl_csf__ALL__plgf_log2"                , "CSF"   , "CSF Other"                    , "log2"
+  , "fl_csf__ALL__gfap_log2"                , "CSF"   , "CSF Other"                    , "log2"
+  , "fl_abeta_4240_ratio_log2"              , "CSF"   , "CSF AD"                       , "log2"
+  , "fl_csf__ALL__ptau_log2"                , "CSF"   , "CSF AD"                       , "log2"
+  , "fl_myelin_basic_protein_log2"          , "CSF"   , "CSF Other"                    , "log2"
+  ##### Plasma                              ,         ,                                ,
+  , "fl_serum_igg_log2"                     , "Plasma", "Plasma Other"                 , "log2"
+  , "fl_plasma__ALL__mmp_1_log2"            , "Plasma", "Plasma MMP"                   , "log2"
+  , "fl_plasma__ALL__mmp_2_log2"            , "Plasma", "Plasma MMP"                   , "log2"
+  , "fl_plasma__ALL__mmp_3_log2"            , "Plasma", "Plasma MMP"                   , "log2"
+  , "fl_plasma__ALL__mmp_9_log2"            , "Plasma", "Plasma MMP"                   , "log2"
+  , "fl_plasma__ALL__mmp_10_log2"           , "Plasma", "Plasma MMP"                   , "log2"
+  , "fl_plasma__ALL__bfgf_log2"             , "Plasma", "Plasma Angio"    , "log2"
+  , "fl_plasma__ALL__flt_1_log2"            , "Plasma", "Plasma Angio"    , "log2"
+  , "fl_plasma__ALL__tie2_log2"             , "Plasma", "Plasma Angio"    , "log2"
+  , "fl_plasma__ALL__vegf_a_log2"           , "Plasma", "Plasma Angio"    , "log2"
+  , "fl_plasma__ALL__vegf_c_log2"           , "Plasma", "Plasma Angio"    , "log2"
+  , "fl_plasma__ALL__vegf_d_log2"           , "Plasma", "Plasma Angio"    , "log2"
+  , "fl_cyto_heparin_plasma_ifn_g_log2"     , "Plasma", "Plasma Cytokines"             , "log2"
+  , "fl_plasma__ALL__il_1b_log2"            , "Plasma", "Plasma Cytokines"             , "log2"
+  , "fl_cyto_heparin_plasma_il_2_log2"      , "Plasma", "Plasma Cytokines"             , "log2"
+  , "fl_cyto_heparin_plasma_il_4_log2"      , "Plasma", "Plasma Cytokines"             , "log2"
+  , "fl_cyto_heparin_plasma_il_6_log2"      , "Plasma", "Plasma Cytokines"             , "log2"
+  , "fl_cyto_heparin_plasma_il_8_log2"      , "Plasma", "Plasma Cytokines"             , "log2"
+  , "fl_cyto_heparin_plasma_il_10_log2"     , "Plasma", "Plasma Cytokines"             , "log2"
+  , "fl_cyto_heparin_plasma_il_12p70_log2"  , "Plasma", "Plasma Cytokines"             , "log2"
+  , "fl_cyto_heparin_plasma_il_13_log2"     , "Plasma", "Plasma Cytokines"             , "log2"
+  , "fl_cyto_heparin_plasma_tnf_a_log2"     , "Plasma", "Plasma Cytokines"             , "log2"
+  , "fl_plasma__ALL__nfl_log2"              , "Plasma", "Plasma Other"                 , "log2"
+  , "fl_plasma__ALL__plgf_log2"             , "Plasma", "Plasma Other"                 , "log2"
+  , "fl_plasma__ALL__gfap_log2"             , "Plasma", "Plasma Other"                 , "log2"
+  , "fl_plasma__ALL__abeta_40_log2"         , "Plasma", "Plasma AD"                    , "log2"
+  , "fl_plasma__ALL__abeta_42_log2"         , "Plasma", "Plasma AD"                    , "log2"
+  , "fl_plasma__ALL__ptau_181_log2"         , "Plasma", "Plasma AD"                    , "log2"
+  , "fl_plasma__ALL__ptau_217_log2"         , "Plasma", "Plasma AD"                    , "log2"
+  ##### MRI                                 ,         ,                                ,
+  , "mri_percent_vol_hippo"                 , "MRI"   , "MRI"                          , "org"
+  # , "mri_ucd_wmhv_percent"                  , "MRI"   , "MRI Other"                    , "org"  # 2/19/2025 too few observations
+  , "mri_mean_cort_thick_mm"                , "MRI"   , "MRI"                          , "org"
+  , "mri_perm_3t_tot"                       , "MRI"   , "MRI"                          , "org"
+  , "mri_dti_psmd"                          , "MRI"   , "MRI"                          , "org"
+  , "mri_dti_freewater_mean"                , "MRI"   , "MRI"                          , "org"
+  )
+
+ # this code generate pairs by pairs 
+# # Create matching pairs of CSF and Plasma biomarkers based on naming patterns
+create_biomarker_pairs <- function() {
+  # Extract biomarker names and create pairs
+  pairs <- tibble::tribble(
+    ~CSF, ~Plasma, ~Biomarker,
+    # MMP biomarkers
+    "fl_msd_csf_mmp_1_log2", "fl_plasma__ALL__mmp_1_log2", "MMP-1",
+    "fl_msd_csf_mmp_2_log2", "fl_plasma__ALL__mmp_2_log2", "MMP-2",
+    "fl_msd_csf_mmp_3_log2", "fl_plasma__ALL__mmp_3_log2", "MMP-3",
+    "fl_msd_csf_mmp_9_log2", "fl_plasma__ALL__mmp_9_log2", "MMP-9",
+    "fl_csf__ALL__mmp_10_log2", "fl_plasma__ALL__mmp_10_log2", "MMP-10",
+
+    # Angiogenic factors
+    "fl_angio_csf_bfgf_log2", "fl_plasma__ALL__bfgf_log2", "bFGF",
+    "fl_angio_csf_flt_1_log2", "fl_plasma__ALL__flt_1_log2", "FLT-1",
+    "fl_angio_csf_tie2_log2", "fl_plasma__ALL__tie2_log2", "TIE2",
+    "fl_angio_csf_vegf_a_log2", "fl_plasma__ALL__vegf_a_log2", "VEGF-A",
+    "fl_angio_csf_vegf_c_log2", "fl_plasma__ALL__vegf_c_log2", "VEGF-C",
+    "fl_angio_csf_vegf_d_log2", "fl_plasma__ALL__vegf_d_log2", "VEGF-D",
+
+    # Cytokines
+    "fl_cyto_csf_ifn_g_log2", "fl_cyto_heparin_plasma_ifn_g_log2", "IFN-γ",
+    "fl_csf__ALL__il_1b_log2", "fl_plasma__ALL__il_1b_log2", "IL-1β",
+    "fl_cyto_csf_il_2_log2", "fl_cyto_heparin_plasma_il_2_log2", "IL-2",
+    "fl_cyto_csf_il_4_log2", "fl_cyto_heparin_plasma_il_4_log2", "IL-4",
+    "fl_cyto_csf_il_6_log2", "fl_cyto_heparin_plasma_il_6_log2", "IL-6",
+    "fl_cyto_csf_il_8_log2", "fl_cyto_heparin_plasma_il_8_log2", "IL-8",
+    "fl_cyto_csf_il_10_log2", "fl_cyto_heparin_plasma_il_10_log2", "IL-10",
+    "fl_cyto_csf_il_12p70_log2", "fl_cyto_heparin_plasma_il_12p70_log2", "IL-12p70",
+    "fl_cyto_csf_il_13_log2", "fl_cyto_heparin_plasma_il_13_log2", "IL-13",
+    "fl_cyto_csf_tnf_a_log2", "fl_cyto_heparin_plasma_tnf_a_log2", "TNF-α",
+
+    # Other markers
+    "fl_csf__ALL__nfl_log2", "fl_plasma__ALL__nfl_log2", "NFL",
+    "fl_csf__ALL__plgf_log2", "fl_plasma__ALL__plgf_log2", "PLGF",
+    "fl_csf__ALL__gfap_log2", "fl_plasma__ALL__gfap_log2", "GFAP",
+
+    # AD markers
+    "fl_csf__ALL__ptau_log2", "fl_plasma__ALL__ptau_181_log2", "pTau-181",
+    # "fl_csf__ALL__ptau_log2", "fl_plasma__ALL__ptau_217_log2", "pTau-217" # wrong I could not find CSF for 217
+    
+  
+    
+  )
+
+  # Add group information based on dat_var_label_matching
+  pairs <- pairs %>%
+    left_join(
+      dat_var_label_matching %>% select(Var, Type) %>% rename(CSF = Var, CSF_Type = Type),
+      by = "CSF"
+    ) %>%
+    left_join(
+      dat_var_label_matching %>% select(Var, Type) %>% rename(Plasma = Var, Plasma_Type = Type),
+      by = "Plasma"
+    ) %>%
+    mutate(
+      Group = case_when(
+        str_detect(CSF_Type, "MMP") ~ "Matrix Metalloproteinases",
+        str_detect(CSF_Type, "Angiogenic") ~ "Angiogenic Factors",
+        str_detect(CSF_Type, "Cytokines") ~ "Cytokines",
+        str_detect(CSF_Type, "AD") ~ "AD Biomarkers",
+        Biomarker %in% c("NFL", "PLGF", "GFAP") ~ "Neurodegeneration Markers",
+        TRUE ~ "Other Biomarkers"
+      )
+    )
+
+  return(pairs)
+}
+#
+# # Define color palette for diagnosis groups
+dx_colors <- c(
+  "AD" = "#E41A1C",        # Red
+  "SIVD" = "#377EB8",      # Blue
+  "Mixed" = "#4DAF4A",     # Green
+  "LA" = "#984EA3",        # Purple
+  "MI" = "#FF7F00",        # Orange
+  "Unknown" = "#A6A6A6",   # Gray
+  "Control" = "#F781BF",   # Pink
+  "Repeat pt" = "#999999"  # Dark gray
+)
+
+
+
+
+# Function to create a single scatterplot
+create_biomarker_plot <- function(data, csf_var, plasma_var, biomarker_name) {
+  # Check if both variables exist in the data
+  if (!all(c(csf_var, plasma_var) %in% names(data))) {
+    return(NULL)
+  }
+
+  # Prepare plot data
+  plot_data <- data %>%
+    select(all_of(c(csf_var, plasma_var, "dx_current"))) %>%
+    filter(!is.na(.data[[csf_var]]) & !is.na(.data[[plasma_var]]))
+
+  # Calculate overall correlation
+  overall_cor <- cor(plot_data[[csf_var]], plot_data[[plasma_var]],
+                     use = "complete.obs", method = "pearson")
+
+  # Calculate correlation by diagnosis group
+  group_cors <- plot_data %>%
+    group_by(dx_current) %>%
+    summarize(
+      n = n(),
+      r = cor(.data[[csf_var]], .data[[plasma_var]], use = "complete.obs"),
+      .groups = 'drop'
+    ) %>%
+    filter(n >= 3)  # Only show correlation for groups with at least 3 samples
+
+  # Create plot
+  p <- ggplot(plot_data, aes(x = .data[[plasma_var]], y = .data[[csf_var]])) +
+    # Add points colored by diagnosis
+    geom_point(aes(color = dx_current), alpha = 0.6, size = 2) +
+    # Add overall regression line
+    geom_smooth(method = "lm", se = TRUE, color = "black",
+                linetype = "solid", linewidth = 0.8, alpha = 0.3) +
+    # Add regression lines for each diagnosis group
+    scale_color_manual(values = dx_colors, name = "Diagnosis") +
+    labs(
+      title = biomarker_name,
+      subtitle = sprintf("Overall r = %.3f, n = %d", overall_cor, nrow(plot_data)),
+      x = "Plasma (log2)",
+      y = "CSF (log2)"
+    ) +
+    theme_minimal(base_size = 9) +
+    theme(
+      plot.title = element_text(size = 11, face = "bold", hjust = 0.5),
+      plot.subtitle = element_text(size = 8, hjust = 0.5, color = "gray40"),
+      panel.grid.minor = element_blank(),
+      panel.border = element_rect(fill = NA, color = "gray70"),
+      legend.position = "right",
+      legend.title = element_text(size = 8),
+      legend.text = element_text(size = 7),
+      legend.key.size = unit(0.8, "lines"),
+      axis.text = element_text(size = 7),
+      axis.title = element_text(size = 8)
+    )
+
+  # Add correlation text for each group
+  cor_text <- group_cors %>%
+    mutate(label = sprintf("%s: r=%.2f (n=%d)", dx_current, r, n)) %>%
+    summarize(label = paste(label, collapse = "\n"))
+
+  if (nrow(group_cors) > 0) {
+    p <- p +
+      annotate("text", x = Inf, y = Inf, label = cor_text$label,
+               hjust = 1.05, vjust = 1.05, size = 2.5, color = "gray30",
+               fontface = "italic")
+  }
+
+  return(p)
+}
+
+# Create all biomarker pairs
+biomarker_pairs <- create_biomarker_pairs()
+
+# Generate plots organized by group
+plots_by_group <- list()
+group_order <- c("Matrix Metalloproteinases", "Angiogenic Factors",
+                 "Cytokines", "Neurodegeneration Markers", "AD Biomarkers",
+                 "Other Biomarkers")
+
+for (group in group_order) {
+  group_pairs <- biomarker_pairs %>% filter(Group == group)
+
+  if (nrow(group_pairs) > 0) {
+    group_plots <- list()
+
+    for (i in seq_len(nrow(group_pairs))) {
+      p <- create_biomarker_plot(
+        data = dat_sub,
+        csf_var = group_pairs$CSF[i],
+        plasma_var = group_pairs$Plasma[i],
+        biomarker_name = group_pairs$Biomarker[i]
+      )
+
+      if (!is.null(p)) {
+        group_plots[[length(group_plots) + 1]] <- p
+      }
+    }
+
+    if (length(group_plots) > 0) {
+      plots_by_group[[group]] <- group_plots
+    }
+  }
+}
+
+# Create PDF with multiple plots per page
+pdf("csf_plasma_biomarker_comparisons.pdf", width = 11, height = 8.5)
+
+# Title page
+plot.new()
+text(0.5, 0.6, "CSF vs Plasma Biomarker Correlations",
+     cex = 2.5, font = 2, col = "darkblue")
+text(0.5, 0.5, "Comparison by Diagnosis Groups",
+     cex = 1.5, font = 1, col = "darkblue")
+text(0.5, 0.3, format(Sys.Date(), "%B %d, %Y"),
+     cex = 1.2, font = 3, col = "gray40")
+
+# Summary page
+plot.new()
+text(0.5, 0.9, "Summary of Biomarker Groups", cex = 1.8, font = 2)
+y_pos <- 0.8
+for (group in names(plots_by_group)) {
+  text(0.1, y_pos, paste0("• ", group, ": ", length(plots_by_group[[group]]), " biomarkers"),
+       cex = 1.2, adj = 0)
+  y_pos <- y_pos - 0.08
+}
+
+# Plot pages - 4 plots per page
+for (group in names(plots_by_group)) {
+  group_plots <- plots_by_group[[group]]
+  n_plots <- length(group_plots)
+  n_pages <- ceiling(n_plots / 4)
+
+  for (page in 1:n_pages) {
+    start_idx <- (page - 1) * 4 + 1
+    end_idx <- min(page * 4, n_plots)
+
+    page_plots <- group_plots[start_idx:end_idx]
+
+    # Add empty plots if needed to fill the grid
+    while (length(page_plots) < 4) {
+      page_plots[[length(page_plots) + 1]] <- plot_spacer()
+    }
+
+    # Create page layout
+    page_layout <- wrap_plots(page_plots, ncol = 2, nrow = 2) +
+      plot_annotation(
+        title = group,
+        subtitle = paste0("Page ", page, " of ", n_pages),
+        theme = theme(
+          plot.title = element_text(size = 16, face = "bold", hjust = 0.5),
+          plot.subtitle = element_text(size = 12, hjust = 0.5, color = "gray40")
+        )
+      )
+
+    print(page_layout)
+  }
+}
+
+# Close PDF
+dev.off()
+
+# 
+
+# ---- ALSO SHOW PAGES IN R PLOT PANE ----
+
+# If you used patchwork functions above, make sure it's loaded here too
+if (!"package:patchwork" %in% search()) library(patchwork)
+
+# Only show groups that actually exist (and keep your preferred order)
+present_groups <- group_order[group_order %in% names(plots_by_group)]
+
+for (group in present_groups) {
+  group_plots <- plots_by_group[[group]]
+  n_plots <- length(group_plots)
+  n_pages <- ceiling(n_plots / 4)
+
+  for (page in 1:n_pages) {
+    start_idx <- (page - 1) * 4 + 1
+    end_idx <- min(page * 4, n_plots)
+    page_plots <- group_plots[start_idx:end_idx]
+
+    # fill to 4 plots if needed
+    while (length(page_plots) < 4) page_plots[[length(page_plots) + 1]] <- patchwork::plot_spacer()
+
+    # same 2x2 layout + title/subtitle
+    page_layout <- patchwork::wrap_plots(page_plots, ncol = 2, nrow = 2) +
+      patchwork::plot_annotation(
+        title = group,
+        subtitle = paste0("Page ", page, " of ", n_pages),
+        theme = theme(
+          plot.title = element_text(size = 16, face = "bold", hjust = 0.5),
+          plot.subtitle = element_text(size = 12, hjust = 0.5, color = "gray40")
+        )
+      )
+
+    # print to the RStudio/graphics device
+    print(page_layout)
+  }
+}
+
+# ---- AFTER dev.off(), preview each plot individually in the Plot pane ----
+
+# (Optional) keep your preferred order but only for groups that exist
+present_groups <- group_order[group_order %in% names(plots_by_group)]
+
+for (grp in present_groups) {
+  message("Previewing group: ", grp)
+  for (p in plots_by_group[[grp]]) {
+    print(p)  # <- this is the line you asked about
+  }
+}
+
+# ---- Overall CSF–Plasma correlation per biomarker pair + one distribution plot ----
+if (!requireNamespace("dplyr", quietly = TRUE)) library(dplyr)
+if (!requireNamespace("purrr", quietly = TRUE)) library(purrr)
+if (!requireNamespace("ggplot2", quietly = TRUE)) library(ggplot2)
+
+safe_cor <- function(x, y) {
+  if (is.null(x) || is.null(y)) return(NA_real_)
+  suppressWarnings(stats::cor(x, y, use = "complete.obs", method = "pearson"))
+}
+safe_n <- function(x, y) sum(stats::complete.cases(x, y))
+
+# Compute overall r and n for each CSF–plasma pair
+corr_overall <- biomarker_pairs %>%
+  mutate(
+    r_overall = purrr::map2_dbl(CSF, Plasma, ~ safe_cor(dat_sub[[.x]], dat_sub[[.y]])),
+    n_overall = purrr::map2_int(CSF, Plasma, ~ safe_n(dat_sub[[.x]], dat_sub[[.y]]))
+  ) %>%
+  filter(!is.na(r_overall) & n_overall >= 3)
+
+
+
+# One plot: distribution of overall correlations
+corr_overall <- corr_overall %>%
+  dplyr::mutate(sign_r = ifelse(r_overall >= 0, "Positive", "Negative"))
+
+p_corr_dist <- ggplot(corr_overall, aes(x = r_overall, fill = sign_r)) +
+  geom_histogram(
+    bins  = 24,
+    color = "white",
+    alpha = 0.9,
+    position = "identity"
+  ) +
+  geom_vline(xintercept = 0, linetype = "dashed", color = "gray40") +
+  scale_fill_manual(
+    values = c("Negative" = "#377EB8", "Positive" = "#E41A1C"),
+    name   = "Sign of r"
+  ) +
+  labs(
+    title    = "Distribution of Overall CSF–Plasma Biomarker Correlations",
+    subtitle = sprintf("One value per biomarker pair (n pairs = %d)", nrow(corr_overall)),
+    x        = "Pearson r (overall)",
+    y        = "Count"
+  ) +
+  theme_minimal(base_size = 9) +
+  theme(
+    plot.title    = element_text(face = "bold", hjust = 0.5),
+    plot.subtitle = element_text(color = "gray40", hjust = 0.5),
+    axis.title    = element_text(face = "bold"),
+    panel.grid.minor = element_blank(),
+    legend.position = "top"
+  )
+
+print(p_corr_dist)
+
+
+
+
+# Save the figure
+ggplot2::ggsave(
+  filename = "csf_plasma_correlation_distribution.pdf",
+  plot = p_corr_dist, width = 7, height = 5, units = "in"
+)
+
+
+if (!requireNamespace("stringr", quietly = TRUE)) {
+  install.packages("stringr")
+}
+library(stringr)
+
+library(dplyr)
+library(stringr)
+# to extract variables from the dat_var_label_matching
+dat_var_imp <-
+  dat_var_label_matching %>%
+  filter(Group %in% c("CSF", "Plasma")) %>%
+  mutate(
+    marker_id = case_when(
+      # pTau181: CSF + Plasma
+      Var %in% c("fl_csf__ALL__ptau_log2",
+                 "fl_plasma__ALL__ptau_181_log2") ~ "pTau181",
+
+      # The rest
+      str_detect(Var, "mmp_9")   ~ "MMP-9",
+      str_detect(Var, "vegf_d")  ~ "VEGF-D",
+      str_detect(Var, "il_13")   ~ "IL-13",
+      str_detect(Var, "nfl")     ~ "NfL",
+      str_detect(Var, "gfap")    ~ "GFAP",
+      TRUE ~ NA_character_
+    )
+  ) %>%
+  filter(!is.na(marker_id))
+
+dat_var_imp
+
+
+corr_overall_marked <- corr_overall %>%
+  # Attach marker info for CSF vars
+  dplyr::left_join(
+    dat_var_imp %>%
+      dplyr::filter(Group == "CSF") %>%
+      dplyr::select(Var, marker_id),
+    by = c("CSF" = "Var")
+  ) %>%
+  dplyr::rename(CSF_marker = marker_id) %>%
+  # Attach marker info for Plasma vars
+  dplyr::left_join(
+    dat_var_imp %>%
+      dplyr::filter(Group == "Plasma") %>%
+      dplyr::select(Var, marker_id),
+    by = c("Plasma" = "Var")
+  ) %>%
+  dplyr::rename(Plasma_marker = marker_id)
+
+
+corr_key <- corr_overall_marked %>%
+  dplyr::filter(
+    !is.na(CSF_marker),
+    !is.na(Plasma_marker),
+    CSF_marker == Plasma_marker
+  ) %>%
+  dplyr::mutate(
+    pretty_label = paste0(CSF_marker, " (CSF vs plasma)")
+  )
+
+attr(dat_sub[["fl_cyto_csf_il_13_log2"]],        "label") <- "CSF IL-13"
+attr(dat_sub[["fl_cyto_heparin_plasma_il_13_log2"]], "label") <- "Plasma IL-13"
+make_pair_plot <- function(csf_var, plasma_var, label, r, n, dat = dat_sub) {
+  e_plot_scatterplot(
+    dat_plot  = dat,
+    var_x     = csf_var,
+    var_y     = plasma_var,
+    var_color = "dx_current",    # AD / LA / Mixed / ...
+    var_facet = NULL,
+    text_title = sprintf("%s\nr = %.2f, n = %d", label, r, n),
+    sw_print  = FALSE,
+    smooth_all = "lm",              # linear regression line over all points
+    sw_smooth_all_se = FALSE,       # no SE band
+    smooth_by_var_color = "none",   # no separate lines by color
+    sw_smooth_by_var_color_se = FALSE,
+    sw_corr_in_subtitle = FALSE,    # we already show r in the title
+    sw_var_x_name_str_wrap_width = 1e5,
+    sw_var_y_name_str_wrap_width = 1e5
+  )
+
+}
+
+
+
+
+highlight_plots <- purrr::pmap(
+  list(
+    csf_var = corr_key$CSF,
+    plasma_var = corr_key$Plasma,
+    label   = corr_key$pretty_label,
+    r       = corr_key$r_overall,
+    n       = corr_key$n_overall
+  ),
+  make_pair_plot
+)
+
+# After creating highlight_plots, remove legends from each plot
+highlight_plots_no_legend <- lapply(highlight_plots, function(p) {
+  p + theme(legend.position = "none")
+})
+
+
+# Extract legend 
+shared_legend <- cowplot::get_legend(
+  highlight_plots[[1]] + 
+    guides(color = guide_legend(nrow = 1)) +  # horizontal legend
+    theme(
+      legend.position = "right",
+      legend.title = element_text(face = "bold"),
+      legend.text = element_text(size = 10)
+    )
+)
+
+p_pairs_grid <- cowplot::plot_grid(
+  plotlist = highlight_plots_no_legend,
+  ncol     = 2,    # adjust rows/cols as you like
+  labels   = NULL  # or "AUTO"
+)
+
+# Combine histogram and pairs grid (both without legends)
+p_main <- cowplot::plot_grid(
+  p_corr_dist,  # keep histogram legend if you want it, or use p_corr_dist_no_legend
+  p_pairs_grid,
+  ncol = 2,
+  rel_widths = c(1, 2)
+)
+
+# Add the shared legend at the bottom
+p_corr_with_examples <- cowplot::plot_grid(
+  p_main,
+  shared_legend,
+  ncol = 1,
+  rel_heights = c(1, 0.1)  # adjust ratio as needed
+)
+
+print(p_corr_with_examples)
+
+ggsave(
+  filename = "All_figures_for_paper/fig_csf_plasma_corr_and_key_pairs.png",
+  plot     = p_corr_with_examples,
+  width    = 14,
+  height   = 6,
+  dpi      = 300,
+  bg       = "white"
+)
+
+
+
+# ---- (Optional) If you want the distribution by biomarker group (comment out if not needed) ----
+# p_corr_by_group <- ggplot(corr_overall, aes(x = r_overall)) +
+#   geom_histogram(bins = 18, alpha = 0.9) +
+#   geom_vline(xintercept = 0, linetype = "dashed") +
+#   facet_wrap(~ Group, scales = "free_y") +
+#   labs(
+#     title = "CSF–Plasma Correlations by Biomarker Group",
+#     x = "Pearson r (overall)", y = "Count"
+#   ) +
+#   theme_minimal(base_size = 11)
+# print(p_corr_by_group)
+# ggsave("csf_plasma_correlation_distribution_by_group.pdf", p_corr_by_group, width = 10, height = 7, units = "in")
+
+
+# 
+# library(tidyverse)
+# library(ggplot2)
+# library(patchwork)
+# library(scales)
+# library(cowplot)
+# 
+# # Extract all CSF and Plasma biomarkers from the data
+# get_all_biomarkers <- function(data) {
+#   # data = dat_sub
+#   all_vars <- names(data)
+#   
+#   # Get CSF biomarkers (containing "csf" in the name)
+#   csf_vars <- all_vars[str_detect(all_vars, "csf") & str_detect(all_vars, "fl_")]
+#   
+#   # Get Plasma biomarkers (containing "plasma" or "serum" in the name)
+#   plasma_vars <- all_vars[(str_detect(all_vars, "plasma") | str_detect(all_vars, "serum")) & 
+#                           str_detect(all_vars, "fl_")]
+#   
+#   # Add IgG variables that might be missed
+#   if ("fl_serum_igg_log2" %in% all_vars) {
+#     plasma_vars <- unique(c(plasma_vars, "fl_serum_igg_log2"))
+# 
+#   }
+#   
+#   list(csf = csf_vars, plasma = plasma_vars)
+# }
+# 
+# # Define color palette for diagnosis groups
+# dx_colors <- c(
+#   "AD" = "#E41A1C",        # Red
+#   "SIVD" = "#377EB8",      # Blue
+#   "Mixed" = "#4DAF4A",     # Green
+#   "LA" = "#984EA3",        # Purple
+#   "MI" = "#FF7F00",        # Orange
+#   "Unknown" = "#A6A6A6",   # Gray
+#   "Control" = "#F781BF",   # Pink
+#   "Repeat pt" = "#999999"  # Dark gray
+# )
+# 
+# # Function to extract biomarker name from variable
+# extract_biomarker_name <- function(var_name) {
+#   # Remove prefixes and suffixes
+#   name <- var_name %>%
+#     str_remove("^fl_") %>%
+#     str_remove("_log2$") %>%
+#     str_remove("csf_") %>%
+#     str_remove("plasma_") %>%
+#     str_remove("serum_") %>%
+#     str_remove("__ALL__") %>%
+#     str_remove("msd_") %>%
+#     str_remove("angio_") %>%
+#     str_remove("cyto_") %>%
+#     str_remove("heparin_") %>%
+#     str_replace_all("_", "-") %>%
+#     toupper()
+#   
+#   return(name)
+# }
+# 
+# # Function to create a single scatterplot
+# create_biomarker_plot <- function(data, csf_var, plasma_var, simplified = TRUE) {
+#   # Check if both variables exist in the data
+#   if (!all(c(csf_var, plasma_var) %in% names(data))) {
+#     return(NULL)
+#   }
+#   
+#   # Prepare plot data
+#   plot_data <- data %>%
+#     select(all_of(c(csf_var, plasma_var, "dx_current"))) %>%
+#     filter(!is.na(.data[[csf_var]]) & !is.na(.data[[plasma_var]]))
+#   
+#   # Skip if too few observations
+#   if (nrow(plot_data) < 10) {
+#     return(NULL)
+#   }
+#   
+#   # Calculate overall correlation
+#   overall_cor <- cor(plot_data[[csf_var]], plot_data[[plasma_var]], 
+#                      use = "complete.obs", method = "pearson")
+#   
+#   # Extract biomarker names
+#   csf_name <- extract_biomarker_name(csf_var)
+#   plasma_name <- extract_biomarker_name(plasma_var)
+#   
+#   # Create plot
+#   if (simplified) {
+#     # Simplified version for many plots
+#     p <- ggplot(plot_data, aes(x = .data[[plasma_var]], y = .data[[csf_var]])) +
+#       geom_point(aes(color = dx_current), alpha = 0.5, size = 1) +
+#       geom_smooth(method = "lm", se = FALSE, color = "black", 
+#                   linetype = "solid", linewidth = 0.5) +
+#       scale_color_manual(values = dx_colors, name = "Diagnosis") +
+#       labs(
+#         title = paste0("CSF: ", csf_name, " vs Plasma: ", plasma_name),
+#         subtitle = sprintf("r = %.3f, n = %d", overall_cor, nrow(plot_data)),
+#         x = "Plasma (log2)",
+#         y = "CSF (log2)"
+#       ) +
+#       theme_minimal(base_size = 7) +
+#       theme(
+#         plot.title = element_text(size = 7, face = "bold", hjust = 0.5),
+#         plot.subtitle = element_text(size = 6, hjust = 0.5, color = "gray40"),
+#         panel.grid.minor = element_blank(),
+#         panel.border = element_rect(fill = NA, color = "gray80", linewidth = 0.5),
+#         legend.position = "right",
+#         axis.text = element_text(size = 5),
+#         axis.title = element_text(size = 6),
+#                  plot.margin = ggplot2::margin(t = 2, r = 2, b = 2, l = 2, unit = "pt")
+#       )
+#   } else {
+#     # Detailed version
+#     p <- ggplot(plot_data, aes(x = .data[[plasma_var]], y = .data[[csf_var]])) +
+#       geom_point(aes(color = dx_current), alpha = 0.6, size = 2) +
+#       geom_smooth(method = "lm", se = TRUE, color = "black", 
+#                   linetype = "solid", linewidth = 0.8, alpha = 0.3) +
+#       geom_smooth(aes(color = dx_current), method = "lm", se = FALSE, 
+#                   linewidth = 0.6, alpha = 0.8) +
+#       scale_color_manual(values = dx_colors, name = "Diagnosis") +
+#       labs(
+#         title = paste0("CSF: ", csf_name, " vs Plasma: ", plasma_name),
+#         subtitle = sprintf("Overall r = %.3f, n = %d", overall_cor, nrow(plot_data)),
+#         x = paste0("Plasma: ", plasma_name, " (log2)"),
+#         y = paste0("CSF: ", csf_name, " (log2)")
+#       ) +
+#       theme_minimal(base_size = 9) +
+#       theme(
+#         plot.title = element_text(size = 10, face = "bold"),
+#         plot.subtitle = element_text(size = 8, color = "gray40"),
+#         panel.grid.minor = element_blank(),
+#         panel.border = element_rect(fill = NA, color = "gray70"),
+#         legend.position = "right",
+#         legend.title = element_text(size = 8),
+#         legend.text = element_text(size = 7),
+#         legend.key.size = unit(0.8, "lines")
+#       )
+#   }
+#   
+#   return(p)
+# }
+# 
+# # Get all biomarkers
+# biomarkers <- get_all_biomarkers(dat_sub)
+# n_csf <- length(biomarkers$csf)
+# n_plasma <- length(biomarkers$plasma)
+# total_combinations <- n_csf * n_plasma
+# 
+# cat(sprintf("Found %d CSF biomarkers and %d plasma biomarkers\n", n_csf, n_plasma))
+# cat(sprintf("This will create %d total combinations\n", total_combinations))
+# 
+# # Create directory for individual plots
+# dir.create("csf_plasma_individual_plots", showWarnings = FALSE)
+# 
+# # Group CSF biomarkers by type using dat_var_label_matching
+# csf_grouped <- dat_var_label_matching %>%
+#   filter(Var %in% biomarkers$csf) %>%
+#   mutate(
+#     CSF_Group = case_when(
+#       str_detect(Type, "MMP") ~ "CSF MMP",
+#       str_detect(Type, "Angiogenic") ~ "CSF Angiogenic Factors",
+#       str_detect(Type, "Cytokines") ~ "CSF Cytokines",
+#       str_detect(Type, "AD") ~ "CSF AD Markers",
+#       str_detect(Type, "CSF Permeability") ~ "CSF Permeability",
+#       TRUE ~ "CSF Other"
+#     )
+#   ) %>%
+#   group_by(CSF_Group) %>%
+#   summarize(vars = list(Var), .groups = 'drop')
+# 
+# # Create PDF with all combinations
+# pdf("csf_plasma_all_combinations.pdf", width = 14, height = 10)
+# 
+# # Title page
+# plot.new()
+# text(0.5, 0.6, "CSF vs Plasma Biomarker Analysis", 
+#      cex = 2.5, font = 2, col = "darkblue")
+# text(0.5, 0.5, "All Possible Combinations", 
+#      cex = 1.8, font = 1, col = "darkblue")
+# text(0.5, 0.4, sprintf("%d CSF × %d Plasma = %d Total Plots", 
+#                        n_csf, n_plasma, total_combinations), 
+#      cex = 1.2, font = 1, col = "gray40")
+# text(0.5, 0.3, format(Sys.Date(), "%B %d, %Y"), 
+#      cex = 1.2, font = 3, col = "gray40")
+# 
+# # Summary page
+# plot.new()
+# text(0.5, 0.9, "Summary of Biomarker Groups", cex = 1.8, font = 2)
+# y_pos <- 0.8
+# for (i in seq_len(nrow(csf_grouped))) {
+#   group_name <- csf_grouped$CSF_Group[i]
+#   n_vars <- length(csf_grouped$vars[[i]])
+#   text(0.1, y_pos, paste0("• ", group_name, ": ", n_vars, " biomarkers × ", 
+#                           n_plasma, " plasma = ", n_vars * n_plasma, " plots"), 
+#        cex = 1, adj = 0)
+#   y_pos <- y_pos - 0.06
+# }
+# 
+# # Legend page
+# plot.new()
+# text(0.5, 0.9, "Diagnosis Group Legend", cex = 1.8, font = 2)
+# legend("center", 
+#        legend = names(dx_colors), 
+#        col = dx_colors, 
+#        pch = 19, 
+#        cex = 1.5, 
+#        title = "Diagnosis Groups",
+#        bty = "n")
+# 
+# # Create plots for each CSF group
+# for (i in seq_len(nrow(csf_grouped))) {
+#   group_name <- csf_grouped$CSF_Group[i]
+#   csf_vars <- csf_grouped$vars[[i]]
+# 
+#   cat(sprintf("\nProcessing %s (%d CSF biomarkers)\n", group_name, length(csf_vars)))
+# 
+#   # For each CSF biomarker in this group
+#   for (csf_var in csf_vars) {
+#     csf_name <- extract_biomarker_name(csf_var)
+# 
+#          # Create plots for all plasma biomarkers
+#     plots <- list()
+#     plot_count <- 0
+# 
+#     for (plasma_var in biomarkers$plasma) {
+#       p <- create_biomarker_plot(dat_sub, csf_var, plasma_var, simplified = TRUE)
+#       if (!is.null(p)) {
+#         plots[[length(plots) + 1]] <- p
+#         plot_count <- plot_count + 1
+# 
+#         # Save individual plot as PNG
+#         plasma_name <- extract_biomarker_name(plasma_var)
+#         filename <- sprintf("csf_plasma_individual_plots/CSF_%s_vs_Plasma_%s.png",
+#                           csf_name, plasma_name)
+# 
+#         # Create a larger version for individual saving
+#         p_large <- create_biomarker_plot(dat_sub, csf_var, plasma_var, simplified = FALSE)
+#         ggsave(filename, p_large, width = 6, height = 5, dpi = 300, bg = "white")
+# 
+#         if (plot_count %% 10 == 0) {
+#           cat(sprintf("  Saved %d plots for CSF %s...\n", plot_count, csf_name))
+#         }
+#       }
+#     }
+# 
+#     if (length(plots) > 0) {
+#              # Create pages with 9 plots each (3x3 grid)
+#       n_plots <- length(plots)
+#       plots_per_page <- 9
+#       n_pages <- ceiling(n_plots / plots_per_page)
+# 
+#       for (page in 1:n_pages) {
+#         start_idx <- (page - 1) * plots_per_page + 1
+#         end_idx <- min(page * plots_per_page, n_plots)
+# 
+#         page_plots <- plots[start_idx:end_idx]
+# 
+#         # Add empty plots if needed
+#         while (length(page_plots) < plots_per_page) {
+#           page_plots[[length(page_plots) + 1]] <- plot_spacer()
+#         }
+# 
+#                  # Create page layout
+#         page_layout <- wrap_plots(page_plots, ncol = 3, nrow = 3) +
+#           plot_annotation(
+#             title = sprintf("%s - CSF: %s", group_name, csf_name),
+#             subtitle = sprintf("Page %d of %d (Plots %d-%d of %d)",
+#                              page, n_pages, start_idx, end_idx, n_plots),
+#             theme = theme(
+#               plot.title = element_text(size = 14, face = "bold", hjust = 0.5),
+#               plot.subtitle = element_text(size = 10, hjust = 0.5, color = "gray40")
+#             )
+#           )
+# 
+#         print(page_layout)
+#       }
+#     }
+#   }
+# }
+# 
+# # Close PDF
+# dev.off()
+# 
+# # Create a correlation matrix for all combinations
+# cat("\nCalculating correlation matrix for all combinations...\n")
+# 
+# cor_matrix <- matrix(NA, nrow = n_csf, ncol = n_plasma,
+#                      dimnames = list(biomarkers$csf, biomarkers$plasma))
+# 
+# for (i in seq_along(biomarkers$csf)) {
+#   for (j in seq_along(biomarkers$plasma)) {
+#     csf_var <- biomarkers$csf[i]
+#     plasma_var <- biomarkers$plasma[j]
+# 
+#     # Calculate correlation if both variables have sufficient data
+#     data_subset <- dat_sub %>%
+#       select(all_of(c(csf_var, plasma_var))) %>%
+#       na.omit()
+# 
+#     if (nrow(data_subset) >= 10) {
+#       cor_matrix[i, j] <- cor(data_subset[[csf_var]], data_subset[[plasma_var]])
+#     }
+#   }
+# }
+# 
+# # # Save correlation matrix as CSV
+# cor_df <- as.data.frame(cor_matrix)
+# cor_df$CSF_Biomarker <- rownames(cor_df)
+# cor_df <- cor_df[, c("CSF_Biomarker", names(cor_df)[1:(ncol(cor_df)-1)])]
+# 
+# write.csv(cor_df, "csf_plasma_correlation_matrix.csv", row.names = FALSE)
+# 
+# # Create a heatmap of correlations
+# library(pheatmap)
+# library(RColorBrewer)
+# 
+# # # Clean names for plotting
+# rownames(cor_matrix) <- sapply(rownames(cor_matrix), extract_biomarker_name)
+# colnames(cor_matrix) <- sapply(colnames(cor_matrix), extract_biomarker_name)
+# 
+# # # Create heatmap
+# png("csf_plasma_correlation_heatmap.png", width = 16, height = 12, units = "in", res = 300)
+# pheatmap(cor_matrix,
+#          color = colorRampPalette(rev(brewer.pal(n = 7, name = "RdBu")))(100),
+#          breaks = seq(-1, 1, length.out = 101),
+#          cluster_rows = TRUE,
+#          cluster_cols = TRUE,
+#          show_rownames = TRUE,
+#          show_colnames = TRUE,
+#          fontsize_row = 8,
+#          fontsize_col = 8,
+#          main = "CSF vs Plasma Biomarker Correlations (All Combinations)",
+#          na_col = "gray90",
+#          angle_col = 45)
+# dev.off()
+# 
+# # Find strongest correlations
+# cat("\nTop 20 strongest positive correlations:\n")
+# cor_long <- cor_matrix %>%
+#   as.data.frame() %>%
+#   rownames_to_column("CSF") %>%
+#   pivot_longer(-CSF, names_to = "Plasma", values_to = "correlation") %>%
+#   filter(!is.na(correlation)) %>%
+#   arrange(desc(correlation))
+# 
+# print(head(cor_long, 20))
+# 
+# cat("\n\nTop 20 strongest negative correlations:\n")
+# print(tail(cor_long, 20))
+# 
+# # Summary statistics
+# cat("\n\nSummary of all correlations:\n")
+# all_cors <- as.vector(cor_matrix)
+# all_cors <- all_cors[!is.na(all_cors)]
+# summary(all_cors)
+# 
+# cat(sprintf("\nPDF created: csf_plasma_all_combinations.pdf\n"))
+# cat(sprintf("Individual PNG plots saved in: csf_plasma_individual_plots/\n"))
+# cat(sprintf("Correlation matrix saved: csf_plasma_correlation_matrix.csv\n"))
+# cat(sprintf("Heatmap created: csf_plasma_correlation_heatmap.png\n"))
+# 
+# # # Count PNG files created
+# png_files <- list.files("csf_plasma_individual_plots", pattern = "\\.png$", full.names = FALSE)
+# cat(sprintf("\nTotal individual PNG files created: %d\n", length(png_files)))
+
+
+```
+
+```{=html}
+<!---
+# Erik's compile commands in R:
+  fn_qmd <- "Erhardt_Rosenberg_ADRC_Fluid_MRI_NPsy_Analysis_20231030.qmd"
+  setwd("D:/Dropbox/StatAcumen/consult/Authorship/2014_GaryRosenberg_UNM_NIH_VascularDementia_MRI/2024_ADRC/Analyses/202311_ADRC_dx_Fluid_MRI_NPsy")
+  quarto::quarto_render(input = fn_qmd)
+-->
+```
+
+```{r chunk-01, echo=FALSE}
+options(width = 80)
+#options(warn  = -1)
+options(str   = strOptions(list.len = 1e3))
+options(knitr.kable.NA = '') # Display NAs as blanks
+my_seed <- 34567
+set.seed(my_seed)
+
+sw_indy_figures = FALSE
+size_plot_units        = "mm"
+size_plot_1col_width   = 85     # * (1 / 25.4) # inches  Full page (2 columns)
+size_plot_3_4col_width = NA     # # inches  3/4 page
+size_plot_2col_width   = 180    # * (1 / 25.4) # inches  1 column (1/2 page)
+size_plot_height       = 230    # * (1 / 25.4)  # * 607.582 / 486.612 # maximum height for space with caption
+```
+
+------------------------------------------------------------------------
+
+# Next actions
+
+------------------------------------------------------------------------
+
+# Data preliminaries
+
+```{r chunk-003}
+library(erikmisc)
+library(tidyverse)
+library(labelled)
+
+library(randomForestSRC)
+
+# Parallel processing
+library(parallel)
+options(rf.cores = parallel::detectCores() - 2) # OpenMP Parallel Processing
+options(mc.cores = parallel::detectCores() - 2) # R-side Parallel Processing
+```
+
+## Subset data
+
+```{r chunk-004}
+# load("../../Data/Sweden.RData")
+# dat_sweden <-
+#   dat_all |>
+#   dplyr::select(
+#     demo_study_id
+#   , tidyselect::starts_with("fl_")
+#   , -tidyselect::ends_with("_log2")
+#   ) |>
+#   dplyr::mutate(
+#     I_Sweden    = TRUE
+#   , ID          = 20000 + 1:dplyr::n()
+#   , dx_current  = "Sweden"
+#   ) |>
+#   dplyr::rowwise() |>
+#   dplyr::mutate(
+#     prop_complete = mean(!is.na(dplyr::across(tidyselect::everything())))
+#   ) |>
+#   dplyr::ungroup()
+# rm(dat_all)
+# # e_plot_missing(dat_sweden)
+
+load("../../Data/VCI.RData")
+dat_vci <-
+  dat_vci |>
+  dplyr::select(
+    demo_study_id
+  , dx_biological
+  #, tidyselect::any_of(names(dat_sweden))
+  , tidyselect::starts_with("fl_")
+  , tidyselect::starts_with("mri_")
+  , tidyselect::starts_with("npsy_")
+  , -dx_current
+  ) |>
+  dplyr::rename(
+    dx_current = dx_biological
+  ) |>
+  dplyr::mutate(
+    I_VCI       = TRUE
+  , ID          = 10000 + 1:dplyr::n()
+  , dx_current  = dx_current |> fct_recode(SIVD = "SVD")
+  , dx_current  = dx_current |> as.character()
+  ) |>
+  dplyr::filter(
+    dx_current %in% c("Control", "LA", "AD", "SIVD", "Mixed")
+  ) |>
+  dplyr::rowwise() |>
+  dplyr::mutate(
+    prop_complete = mean(!is.na(dplyr::across(tidyselect::everything())))
+  ) |>
+  dplyr::ungroup()
+
+#hist(dat_vci$prop_complete, 100)
+
+# keeping records with at least a proportion not NA, will impute NAs
+# dat_vci <-
+#   dat_vci |>
+#   dplyr::filter(
+#     VCI_prop_complete >= 0.6
+#   )
+
+# CSF labels
+#labelled::var_label(dat_vci$fl_abeta_4240_ratio) <-
+#  paste0(
+#    "CSF "
+#  , labelled::var_label(dat_vci$fl_abeta_4240_ratio)
+#  )
+#labelled::var_label(dat_vci$fl_ptau) <-
+#  paste0(
+#    "CSF "
+#  , labelled::var_label(dat_vci$fl_ptau)
+#  )
+
+# e_plot_missing(
+#     dat_plot       = dat_vci
+#   , var_group      = "dx_current"
+#   , sw_group_sort  = TRUE
+#   , var2_sort      = "prop_complete"
+#   )
+
+# # log2 versions
+# for (n_var in str_subset(names(dat_vci), pattern = "^fl_")) {
+#   dat_vci[, paste0(n_var, "_log2") ] <-
+#     e_log_shift(dat_vci[, n_var])
+#
+#   labelled::var_label(dat_vci[, paste0(n_var, "_log2") ]) <-
+#     paste("log2", labelled::var_label( dat_vci[, n_var] ))
+# }
+
+
+
+# # bind data together
+# dat_all <-
+#   dat_vci |>
+#   dplyr::bind_rows(
+#     dat_sweden
+#   ) |>
+#   dplyr::mutate(
+#     dx_current = dx_current |> factor(levels = c("Control", "LA", "AD", "SIVD", "Mixed", "Sweden"))
+#   )
+
+dat_all <-
+  dat_vci
+
+dat_all <-
+  dat_all |>
+  dplyr::select(
+    ID
+  , demo_study_id
+  , dx_current
+  , prop_complete
+  , tidyselect::starts_with("fl_")
+  , tidyselect::starts_with("mri_")
+  , tidyselect::starts_with("npsy_")
+  #, tidyselect::starts_with("I_")
+  #, tidyselect::all_of(dat_all |> names() |> stringr::str_subset(pattern = stringr::fixed("_csf_"   )) |> sort())
+  #, tidyselect::all_of(dat_all |> names() |> stringr::str_subset(pattern = stringr::fixed("_plasma_")) |> sort())
+  , tidyselect::everything()
+  )
+
+
+dat_sub <-
+  dat_all
+
+p <-
+  e_plot_missing(
+    dat_plot       = dat_sub
+  , var_group      = "dx_current"
+  , sw_group_sort  = TRUE
+  , var2_sort      = "prop_complete"
+  )
+p |> print()
+ggsave(
+      paste0("out/plot_missing", ".png")
+    , plot   = p
+    , width  = 12
+    , height = 10
+    ## png, jpeg
+    , dpi    = 300
+    , bg     = "white"
+    ## pdf
+    #, units  = "in"
+    #, useDingbats = FALSE
+    )
+```
+
+Variable lists and subset.
+
+```{r chunk-009}
+## Variable lists
+Var <- list()
+
+Var[["list"]][["var_fl_all"          ]] <- dat_sub |> names() |> stringr::str_subset(pattern = stringr::fixed("fl_"           )) |> sort()
+Var[["list"]][["var_fl_csf"          ]] <- dat_sub |> names() |> stringr::str_subset(pattern = stringr::fixed("_csf_"         )) |> sort()
+Var[["list"]][["var_fl_plasma"       ]] <- dat_sub |> names() |> stringr::str_subset(pattern = stringr::fixed("_plasma_"      )) |> sort()
+Var[["list"]][["var_fl_angio_csf"    ]] <- dat_sub |> names() |> stringr::str_subset(pattern = stringr::fixed("angio_csf_"    )) |> sort()
+Var[["list"]][["var_fl_angio_plasma" ]] <- dat_sub |> names() |> stringr::str_subset(pattern = stringr::fixed("angio_plasma_" )) |> sort()
+Var[["list"]][["var_fl_cyto_csf"     ]] <- dat_sub |> names() |> stringr::str_subset(pattern = stringr::fixed("cyto_csf_"     )) |> sort()
+Var[["list"]][["var_fl_cyto_plasma"  ]] <- dat_sub |> names() |> stringr::str_subset(pattern = stringr::fixed("cyto_plasma_"  )) |> sort()
+Var[["list"]][["var_fl_msd_csf"      ]] <- dat_sub |> names() |> stringr::str_subset(pattern = stringr::fixed("msd_csf_"      )) |> sort()
+Var[["list"]][["var_fl_msd_plasma"   ]] <- dat_sub |> names() |> stringr::str_subset(pattern = stringr::fixed("msd_plasma_"   )) |> sort()
+Var[["list"]][["var_fl_simoa_csf"    ]] <- dat_sub |> names() |> stringr::str_subset(pattern = stringr::fixed("simoa_csf_"    )) |> sort()
+Var[["list"]][["var_fl_simoa_plasma" ]] <- dat_sub |> names() |> stringr::str_subset(pattern = stringr::fixed("simoa_plasma_" )) |> sort()
+
+### Exclude:
+# fl_blood_date
+# fl_lp_date
+
+#Var[["list"]][["var_mri_all"         ]] <- dat_sub |> names() |> stringr::str_subset(pattern = "^mri_"                         ) |> sort()
+
+Var[["list"]][["var_mri_dti"         ]] <-
+  c(
+    "mri_dti_fabnormal_z"
+  , "mri_dti_freewater_mean"
+  , "mri_dti_freewater_z"
+  , "mri_dti_histpk_z"
+  , "mri_dti_psmd"
+  , "mri_dti_psmd_z"
+  )
+Var[["list"]][["var_mri_perm"         ]] <-
+  c(
+    "mri_perm_15t_mean_brain_ki"
+  , "mri_perm_15t_tot_ki"
+  , "mri_perm_3t_tot"
+  #, "mri_permeability"
+  , "mri_microbleeds"
+  )
+Var[["list"]][["var_mri_spect"         ]] <-
+  c(
+  #  "mri_spectroscopy"
+    "mri_spectroscopy_cho_gpc_pch"
+  , "mri_spectroscopy_cr_mrs"
+  , "mri_spectroscopy_cr_pcr"
+  , "mri_spectroscopy_gln"
+  , "mri_spectroscopy_glu"
+  , "mri_spectroscopy_glu_gln"
+  , "mri_spectroscopy_ins"
+  , "mri_spectroscopy_naa"
+  , "mri_spectroscopy_naa_naag"
+  )
+Var[["list"]][["var_mri_vol"         ]] <-
+  c(
+    "mri_vol_atrophy"
+  , "mri_vol_gm"
+  , "mri_vol_hippocampal"
+  , "mri_vol_intra_cranial_mm3"
+  , "mri_vol_lesion"
+  , "mri_vol_total_brain"
+  , "mri_vol_wm"
+  , "mri_vol_wm_jim"
+  , "mri_vol_wm_ucd"
+  , "mri_percent_hippo_vol"
+  , "mri_percent_wmh_vol"
+  , "mri_mean_cort_thick_mm"
+  )
+
+Var[["list"]][["var_mri_all"         ]] <-
+  c(
+    Var[["list"]][["var_mri_dti"         ]]
+  , Var[["list"]][["var_mri_perm"        ]]
+  , Var[["list"]][["var_mri_spect"       ]]
+  , Var[["list"]][["var_mri_vol"         ]]
+  )
+
+
+
+#Var[["list"]][["var_npsy_all"        ]] <- dat_sub |> names() |> stringr::str_subset(pattern = "^npsy_"                        ) |> stringr::str_subset(pattern = "_t$" ) |> sort()
+Var[["list"]][["var_npsy_sum_t"      ]] <-
+  c(
+    "npsy_overall_t"
+  , "npsy_attention_t"
+  , "npsy_executive_t"
+  , "npsy_language_t"
+  , "npsy_memory_t"
+  , "npsy_processing_t"
+  )
+Var[["list"]][["var_npsy_ft_t"     ]] <-
+  c(
+    "npsy_ft_dom_ave"
+  , "npsy_ft_dom_ave_t"
+  , "npsy_ft_nondom_ave"
+  , "npsy_ft_nondom_ave_t"
+  )
+Var[["list"]][["var_npsy_hvlt_t"     ]] <-
+  c(
+    "npsy_hvlt_delay_raw_tot"
+  , "npsy_hvlt_delay_t"
+  , "npsy_hvlt_immed_raw_tot"
+  , "npsy_hvlt_immed_t"
+  , "npsy_hvlt_rec_disc_index"
+  , "npsy_hvlt_rec_disc_t"
+  )
+Var[["list"]][["var_npsy_peg_t"     ]] <-
+  c(
+    "npsy_peg_dom_t"
+  , "npsy_peg_dom_time"
+  , "npsy_peg_nondom_t"
+  , "npsy_peg_nondom_time"
+  )
+Var[["list"]][["var_npsy_rcft_t"     ]] <-
+  c(
+    "npsy_rcft_copy"
+  , "npsy_rcft_delay_recall"
+  , "npsy_rcft_delay_recall_t"
+  , "npsy_rcft_imm_recall"
+  , "npsy_rcft_imm_recall_t"
+  , "npsy_rcft_recog"
+  , "npsy_rcft_recog_t"
+  )
+Var[["list"]][["var_npsy_strp_t"     ]] <-
+  c(
+    "npsy_strp_color_score"
+  , "npsy_strp_color_score_t"
+  , "npsy_strp_colorword_score"
+  , "npsy_strp_colorword_score_t"
+  , "npsy_strp_cw_interference"
+  , "npsy_strp_cw_interference_t"
+  , "npsy_strp_word_score"
+  , "npsy_strp_word_score_t"
+  )
+Var[["list"]][["var_npsy_wcst_t"     ]] <-
+  c(
+    "npsy_wcst_cat"
+  #, "npsy_wcst_cat_percent"           # ranges, need to be converted to numbers
+  , "npsy_wcst_con_resp"
+  , "npsy_wcst_con_resp_t"
+  , "npsy_wcst_pers_err"
+  , "npsy_wcst_pers_err_t"
+  , "npsy_wcst_pers_resp"
+  , "npsy_wcst_pers_resp_t"
+  , "npsy_wcst_tot_err"
+  , "npsy_wcst_tot_err_t"
+  , "npsy_wrat_t"
+  , "npsy_wrat_tot"
+  )
+Var[["list"]][["var_npsy_others1_t"     ]] <-
+  c(
+    "npsy_boston_t"
+  , "npsy_boston_tot_correct"
+  #, "npsy_clock_cutoff"
+  , "npsy_clock_tot"
+  , "npsy_dig_sym_t"
+  , "npsy_dig_sym_tot"
+  , "npsy_ds_tot_for_back"
+  , "npsy_ds_tot_t"
+  , "npsy_education"
+  )
+Var[["list"]][["var_npsy_others2_t"     ]] <-
+  c(
+    "npsy_faq_score"
+  , "npsy_fas_t"
+  , "npsy_fas_tot"
+  , "npsy_gdi"
+  #, "npsy_gdi_cutoff"
+  , "npsy_mmse"
+  , "npsy_mmse_t"
+  , "npsy_sym_srch_t"
+  , "npsy_sym_srch_tot"
+  )
+
+Var[["list"]][["var_npsy_all"        ]] <-
+  c(
+    Var[["list"]][["var_npsy_sum_t"      ]]
+  , Var[["list"]][["var_npsy_ft_t"       ]]
+  , Var[["list"]][["var_npsy_hvlt_t"     ]]
+  , Var[["list"]][["var_npsy_peg_t"      ]]
+  , Var[["list"]][["var_npsy_rcft_t"     ]]
+  , Var[["list"]][["var_npsy_strp_t"     ]]
+  , Var[["list"]][["var_npsy_wcst_t"     ]]
+  , Var[["list"]][["var_npsy_others1_t"   ]]
+  , Var[["list"]][["var_npsy_others2_t"   ]]
+  )
+
+
+Var[["list"]][["var_all_all"         ]] <-
+  c(
+    Var[["list"]][["var_fl_all"          ]]
+  , Var[["list"]][["var_mri_all"         ]]
+  , Var[["list"]][["var_npsy_all"        ]]
+  )
+
+var_groups <-
+  c(
+    "var_fl_angio_csf"
+  , "var_fl_angio_plasma"
+  , "var_fl_cyto_csf"
+  , "var_fl_cyto_plasma"
+  , "var_fl_msd_csf"
+  , "var_fl_msd_plasma"
+  , "var_fl_simoa_csf"
+  , "var_fl_simoa_plasma"
+  , "var_mri_dti"
+  , "var_mri_perm"
+  , "var_mri_spect"
+  , "var_mri_vol"
+  , "var_npsy_sum_t"
+  , "var_npsy_ft_t"
+  , "var_npsy_hvlt_t"
+  , "var_npsy_peg_t"
+  , "var_npsy_rcft_t"
+  , "var_npsy_strp_t"
+  , "var_npsy_wcst_t"
+  , "var_npsy_others1_t"
+  , "var_npsy_others2_t"
+  )
+
+
+
+var_groups <-
+  c(
+    "var_all_all"
+  , "var_fl_all"
+  , "var_fl_csf"
+  , "var_fl_plasma"
+  , var_groups
+  ) |>
+  unique()
+
+
+```
+
+Reorder dx categories, normalize volume variables to total brain volume.
+
+```{r chunk-011}
+# reorder dx categories
+dat_sub <-
+  dat_sub |>
+  mutate(
+    dx_current =
+      dx_current |>
+      forcats::fct_relevel(c("SIVD", "Mixed", "AD", "LA", "Control")) |>
+      forcats::fct_drop()
+  , dx_current_ADSIVDMX_Control =
+      dx_current |>
+      forcats::fct_collapse(
+        AD_SIVD_MX = c("SIVD", "Mixed", "AD") #, "LA")
+      , Control   = c("Control")
+      ) |>
+      factor(levels = c("AD_SIVD_MX", "Control")) |>
+      forcats::fct_drop()
+  , dx_current_ADMX_SIVD =
+      dx_current |>
+      forcats::fct_collapse(
+        AD_MX   = c("AD", "Mixed")
+      , SIVD = c("SIVD") #"LA",
+      ) |>
+      factor(levels = c("AD_MX", "SIVD")) |>
+      forcats::fct_drop()
+  , dx_current_AD_SIVDMX =
+      dx_current |>
+      forcats::fct_collapse(
+        AD         = c("AD")
+      , SIVD_MX = c("SIVD", "Mixed") # "LA",
+      ) |>
+      factor(levels = c("AD", "SIVD_MX")) |>
+      forcats::fct_drop()
+  , dx_current_AD_SIVD_MX =
+      dx_current |>
+      factor(levels = c("AD", "SIVD", "Mixed")) |>
+      forcats::fct_drop()
+  )
+
+dx_groups <-
+  c(
+    "dx_current"
+  , "dx_current_ADSIVDMX_Control"
+  , "dx_current_ADMX_SIVD"
+  , "dx_current_AD_SIVDMX"
+  , "dx_current_AD_SIVD_MX"
+  )
+
+```
+
+## Drop extreme outliers
+
+```{r chunk-012, fig.height = 4, fig.width = 10}
+#var_list_plot <-
+#  c(Var$list$var_fl_csf, Var$list$var_fl_plasma)
+var_list_plot <-
+  Var |> unlist() |> unique() |> sort()
+
+par(mfrow=c(1,3))
+for (i_plot in 1:length(var_list_plot)) {
+  ## i_plot = 1
+  #if (i_plot > 3) {next}
+
+  if( all(is.na(dat_sub[[ var_list_plot[i_plot] ]])) ) {
+    next
+  }
+
+  plot(
+    x     = 1:nrow(dat_sub)
+  , y     = dat_sub[[ var_list_plot[i_plot] ]]
+  , type  = "p"
+  , main  = paste0("Before: ", var_list_plot[i_plot])
+  , xlab  = ""
+  , ylab  = ""
+  , col   = dat_sub$dx_current
+  , pch   = 20  #3
+  , xlim  = c(1, nrow(dat_sub) * 1.2)
+  )
+  text(
+    x     = 1:nrow(dat_sub)
+  , y     = dat_sub[[ var_list_plot[i_plot] ]]
+  , labels = 1:nrow(dat_sub)
+  , pos   = 4 # 1 = below, 2 = left, 3 = above, 4 = right
+  )
+}
+par(mfrow=c(1,1))
+```
+
+Drop extreme outlying values.
+
+```{r chunk-013}
+# 10/30/2023 Erik
+# Drop extreme outlying values
+# Indicate range to remove (replace with NAs)
+
+#dat_sub$fl_abeta_38                            [dat_sub$fl_abeta_38                                ] <- NA
+#dat_sub$fl_abeta_40                            [dat_sub$fl_abeta_40                                ] <- NA
+#dat_sub$fl_abeta_42                            [dat_sub$fl_abeta_42                                ] <- NA
+#dat_sub$fl_abeta_4240_ratio                    [dat_sub$fl_abeta_4240_ratio                        ] <- NA
+#dat_sub$fl_albumin_index                       [dat_sub$fl_albumin_index                           ] <- NA
+dat_sub$fl_angio_csf_bfgf                      [dat_sub$fl_angio_csf_bfgf                       > 6   ] <- NA
+dat_sub$fl_angio_csf_flt_1                     [dat_sub$fl_angio_csf_flt_1                      < 10   ] <- NA
+#dat_sub$fl_angio_csf_plgf                      [dat_sub$fl_angio_csf_plgf                          ] <- NA
+#dat_sub$fl_angio_csf_tie2                      [dat_sub$fl_angio_csf_tie2                          ] <- NA
+dat_sub$fl_angio_csf_vegf_a                    [dat_sub$fl_angio_csf_vegf_a                     > 19   ] <- NA
+#dat_sub$fl_angio_csf_vegf_c                    [dat_sub$fl_angio_csf_vegf_c                        ] <- NA
+#dat_sub$fl_angio_csf_vegf_d                    [dat_sub$fl_angio_csf_vegf_d                        ] <- NA
+dat_sub$fl_angio_plasma_bfgf                   [dat_sub$fl_angio_plasma_bfgf                    > 300   ] <- NA
+dat_sub$fl_angio_plasma_flt_1                  [dat_sub$fl_angio_plasma_flt_1                   > 250   ] <- NA
+#dat_sub$fl_angio_plasma_plgf                   [dat_sub$fl_angio_plasma_plgf                       ] <- NA
+#dat_sub$fl_angio_plasma_tie2                   [dat_sub$fl_angio_plasma_tie2                       ] <- NA
+#dat_sub$fl_angio_plasma_vegf_a                 [dat_sub$fl_angio_plasma_vegf_a                     ] <- NA
+dat_sub$fl_angio_plasma_vegf_c                 [dat_sub$fl_angio_plasma_vegf_c                  > 1000   ] <- NA
+#dat_sub$fl_angio_plasma_vegf_d                 [dat_sub$fl_angio_plasma_vegf_d                     ] <- NA
+#dat_sub$fl_blood_date                          [dat_sub$fl_blood_date                              ] <- NA
+#dat_sub$fl_csf_albumin                         [dat_sub$fl_csf_albumin                             ] <- NA
+dat_sub$fl_csf_glucose                         [dat_sub$fl_csf_glucose                          < 20   ] <- NA
+#dat_sub$fl_csf_igg                             [dat_sub$fl_csf_igg                                 ] <- NA
+dat_sub$fl_csf_igg_synthesis                   [dat_sub$fl_csf_igg_synthesis                    > 0.5   ] <- NA
+dat_sub$fl_csf_rbc                             [dat_sub$fl_csf_rbc                              > 500   ] <- NA
+dat_sub$fl_csf_tnc                             [dat_sub$fl_csf_tnc                              > 15   ] <- NA
+dat_sub$fl_csf_total_protein                   [dat_sub$fl_csf_total_protein                    > 200   ] <- NA
+dat_sub$fl_cyto_csf_ifn_g                      [dat_sub$fl_cyto_csf_ifn_g                       > 6   ] <- NA
+dat_sub$fl_cyto_csf_il_10                      [dat_sub$fl_cyto_csf_il_10                       > 0.45   ] <- NA
+#dat_sub$fl_cyto_csf_il_12p70                   [dat_sub$fl_cyto_csf_il_12p70                       ] <- NA
+#dat_sub$fl_cyto_csf_il_13                      [dat_sub$fl_cyto_csf_il_13                          ] <- NA
+dat_sub$fl_cyto_csf_il_1b                      [dat_sub$fl_cyto_csf_il_1b                       > 1   ] <- NA
+dat_sub$fl_cyto_csf_il_2                       [dat_sub$fl_cyto_csf_il_2                        > 0.5   ] <- NA
+#dat_sub$fl_cyto_csf_il_4                       [dat_sub$fl_cyto_csf_il_4                           ] <- NA
+dat_sub$fl_cyto_csf_il_6                       [dat_sub$fl_cyto_csf_il_6                        > 6   ] <- NA
+dat_sub$fl_cyto_csf_il_8                       [dat_sub$fl_cyto_csf_il_8                        > 200   ] <- NA
+dat_sub$fl_cyto_csf_tnf_a                      [dat_sub$fl_cyto_csf_tnf_a                       > 0.8   ] <- NA
+#dat_sub$fl_cyto_plasma_ifn_g                   [dat_sub$fl_cyto_plasma_ifn_g                       ] <- NA
+dat_sub$fl_cyto_plasma_il_10                   [dat_sub$fl_cyto_plasma_il_10                    > 3   ] <- NA
+dat_sub$fl_cyto_plasma_il_12p70                [dat_sub$fl_cyto_plasma_il_12p70                 > 1.5   ] <- NA
+#dat_sub$fl_cyto_plasma_il_13                   [dat_sub$fl_cyto_plasma_il_13                       ] <- NA
+dat_sub$fl_cyto_plasma_il_1b                   [dat_sub$fl_cyto_plasma_il_1b                    > 10   ] <- NA
+#dat_sub$fl_cyto_plasma_il_2                    [dat_sub$fl_cyto_plasma_il_2                        ] <- NA
+dat_sub$fl_cyto_plasma_il_4                    [dat_sub$fl_cyto_plasma_il_4                     > 1   ] <- NA
+dat_sub$fl_cyto_plasma_il_6                    [dat_sub$fl_cyto_plasma_il_6                     > 300   ] <- NA
+dat_sub$fl_cyto_plasma_il_8                    [dat_sub$fl_cyto_plasma_il_8                     > 600   ] <- NA
+#dat_sub$fl_cyto_plasma_tnf_a                   [dat_sub$fl_cyto_plasma_tnf_a                       ] <- NA
+dat_sub$fl_igg_index                           [dat_sub$fl_igg_index                            < 0.1   ] <- NA
+#dat_sub$fl_lp_date                             [dat_sub$fl_lp_date                                 ] <- NA
+#dat_sub$fl_msd_csf_mmp_1                       [dat_sub$fl_msd_csf_mmp_1                           ] <- NA
+dat_sub$fl_msd_csf_mmp_10                      [dat_sub$fl_msd_csf_mmp_10                       > 350   ] <- NA
+dat_sub$fl_msd_csf_mmp_2                       [dat_sub$fl_msd_csf_mmp_2                        < 4000   ] <- NA
+#dat_sub$fl_msd_csf_mmp_3                       [dat_sub$fl_msd_csf_mmp_3                           ] <- NA
+#dat_sub$fl_msd_csf_mmp_9                       [dat_sub$fl_msd_csf_mmp_9                           ] <- NA
+dat_sub$fl_msd_mmp_2_index                     [dat_sub$fl_msd_mmp_2_index                      > 1   ] <- NA
+dat_sub$fl_msd_mmp_9_index                     [dat_sub$fl_msd_mmp_9_index                      > 0.01   ] <- NA
+#dat_sub$fl_msd_plasma_mmp_1                    [dat_sub$fl_msd_plasma_mmp_1                        ] <- NA
+#dat_sub$fl_msd_plasma_mmp_10                   [dat_sub$fl_msd_plasma_mmp_10                       ] <- NA
+#dat_sub$fl_msd_plasma_mmp_2                    [dat_sub$fl_msd_plasma_mmp_2                        ] <- NA
+dat_sub$fl_msd_plasma_mmp_3                    [dat_sub$fl_msd_plasma_mmp_3                     > 100000   ] <- NA
+dat_sub$fl_msd_plasma_mmp_9                    [dat_sub$fl_msd_plasma_mmp_9                     > 500000   ] <- NA
+dat_sub$fl_myelin_basic_protein                [dat_sub$fl_myelin_basic_protein                 > 8   ] <- NA
+#dat_sub$fl_oligoclonal_bands                   [dat_sub$fl_oligoclonal_bands                       ] <- NA
+#dat_sub$fl_ptau                                [dat_sub$fl_ptau                                    ] <- NA
+dat_sub$fl_serum_albumin                       [dat_sub$fl_serum_albumin                        < 1500   ] <- NA
+#dat_sub$fl_serum_igg                           [dat_sub$fl_serum_igg                               ] <- NA
+dat_sub$fl_simoa_csf_il_1b                     [dat_sub$fl_simoa_csf_il_1b                      > 0.05   ] <- NA
+#dat_sub$fl_simoa_csf_n2pb_gfap                 [dat_sub$fl_simoa_csf_n2pb_gfap                     ] <- NA
+#dat_sub$fl_simoa_csf_n2pb_nfl                  [dat_sub$fl_simoa_csf_n2pb_nfl                      ] <- NA
+#dat_sub$fl_simoa_csf_n4pe_abeta_40             [dat_sub$fl_simoa_csf_n4pe_abeta_40                 ] <- NA
+#dat_sub$fl_simoa_csf_n4pe_abeta_42             [dat_sub$fl_simoa_csf_n4pe_abeta_42                 ] <- NA
+#dat_sub$fl_simoa_csf_n4pe_gfap                 [dat_sub$fl_simoa_csf_n4pe_gfap                     ] <- NA
+#dat_sub$fl_simoa_csf_n4pe_nfl                  [dat_sub$fl_simoa_csf_n4pe_nfl                      ] <- NA
+#dat_sub$fl_simoa_csf_nfl                       [dat_sub$fl_simoa_csf_nfl                           ] <- NA
+#dat_sub$fl_simoa_csf_plgf                      [dat_sub$fl_simoa_csf_plgf                          ] <- NA
+#dat_sub$fl_simoa_csf_ptau_v2                   [dat_sub$fl_simoa_csf_ptau_v2                       ] <- NA
+#dat_sub$fl_simoa_edta_plasma_il_1b             [dat_sub$fl_simoa_edta_plasma_il_1b                 ] <- NA
+#dat_sub$fl_simoa_edta_plasma_n4pe_abeta_40     [dat_sub$fl_simoa_edta_plasma_n4pe_abeta_40         ] <- NA
+#dat_sub$fl_simoa_edta_plasma_n4pe_abeta_42     [dat_sub$fl_simoa_edta_plasma_n4pe_abeta_42         ] <- NA
+#dat_sub$fl_simoa_edta_plasma_n4pe_gfap         [dat_sub$fl_simoa_edta_plasma_n4pe_gfap             ] <- NA
+#dat_sub$fl_simoa_edta_plasma_n4pe_nfl          [dat_sub$fl_simoa_edta_plasma_n4pe_nfl              ] <- NA
+#dat_sub$fl_simoa_edta_plasma_nfl               [dat_sub$fl_simoa_edta_plasma_nfl                   ] <- NA
+#dat_sub$fl_simoa_edta_plasma_plgf              [dat_sub$fl_simoa_edta_plasma_plgf                  ] <- NA
+#dat_sub$fl_simoa_edta_plasma_ptau_v2           [dat_sub$fl_simoa_edta_plasma_ptau_v2               ] <- NA
+#dat_sub$fl_simoa_heparin_plasma_il_1b          [dat_sub$fl_simoa_heparin_plasma_il_1b              ] <- NA
+#dat_sub$fl_simoa_heparin_plasma_n4pe_abeta_40  [dat_sub$fl_simoa_heparin_plasma_n4pe_abeta_40      ] <- NA
+#dat_sub$fl_simoa_heparin_plasma_n4pe_abeta_42  [dat_sub$fl_simoa_heparin_plasma_n4pe_abeta_42      ] <- NA
+#dat_sub$fl_simoa_heparin_plasma_n4pe_gfap      [dat_sub$fl_simoa_heparin_plasma_n4pe_gfap          ] <- NA
+#dat_sub$fl_simoa_heparin_plasma_n4pe_nfl       [dat_sub$fl_simoa_heparin_plasma_n4pe_nfl           ] <- NA
+#dat_sub$fl_simoa_heparin_plasma_nfl            [dat_sub$fl_simoa_heparin_plasma_nfl                ] <- NA
+#dat_sub$fl_simoa_heparin_plasma_plgf           [dat_sub$fl_simoa_heparin_plasma_plgf               ] <- NA
+#dat_sub$fl_simoa_heparin_plasma_ptau_v2        [dat_sub$fl_simoa_heparin_plasma_ptau_v2            ] <- NA
+#dat_sub$fl_simoa_serum_ptau_v2                 [dat_sub$fl_simoa_serum_ptau_v2                     ] <- NA
+#dat_sub$fl_zym_csf_mmp_2_62_kda                [dat_sub$fl_zym_csf_mmp_2_62_kda                    ] <- NA
+#dat_sub$fl_zym_csf_mmp_2_72_kda                [dat_sub$fl_zym_csf_mmp_2_72_kda                    ] <- NA
+dat_sub$fl_zym_csf_mmp_2_84_kda                [dat_sub$fl_zym_csf_mmp_2_84_kda                 > 6   ] <- NA
+#dat_sub$fl_zym_csf_mmp_2_92_kda                [dat_sub$fl_zym_csf_mmp_2_92_kda                    ] <- NA
+#dat_sub$fl_zym_mmp_2_index                     [dat_sub$fl_zym_mmp_2_index                         ] <- NA
+dat_sub$fl_zym_mmp_9_index                     [dat_sub$fl_zym_mmp_9_index                      > 0.30   ] <- NA
+#dat_sub$fl_zym_plasma_mmp_2_62_kda             [dat_sub$fl_zym_plasma_mmp_2_62_kda                 ] <- NA
+#dat_sub$fl_zym_plasma_mmp_2_72_kda             [dat_sub$fl_zym_plasma_mmp_2_72_kda                 ] <- NA
+#dat_sub$fl_zym_plasma_mmp_2_84_kda             [dat_sub$fl_zym_plasma_mmp_2_84_kda                 ] <- NA
+dat_sub$fl_zym_plasma_mmp_2_92_kda             [dat_sub$fl_zym_plasma_mmp_2_92_kda              > 300   ] <- NA
+#dat_sub$mri_dti_fabnormal_z                    [dat_sub$mri_dti_fabnormal_z                        ] <- NA
+#dat_sub$mri_dti_freewater_mean                 [dat_sub$mri_dti_freewater_mean                     ] <- NA
+#dat_sub$mri_dti_freewater_z                    [dat_sub$mri_dti_freewater_z                        ] <- NA
+#dat_sub$mri_dti_histpk_z                       [dat_sub$mri_dti_histpk_z                           ] <- NA
+#dat_sub$mri_dti_psmd                           [dat_sub$mri_dti_psmd                               ] <- NA
+#dat_sub$mri_dti_psmd_z                         [dat_sub$mri_dti_psmd_z                             ] <- NA
+#dat_sub$mri_mean_cort_thick_mm                 [dat_sub$mri_mean_cort_thick_mm                     ] <- NA
+#dat_sub$mri_microbleeds                        [dat_sub$mri_microbleeds                            ] <- NA
+#dat_sub$mri_percent_hippo_vol                  [dat_sub$mri_percent_hippo_vol                      ] <- NA
+#dat_sub$mri_percent_wmh_vol                    [dat_sub$mri_percent_wmh_vol                        ] <- NA
+#dat_sub$mri_perm_15t_mean_brain_ki             [dat_sub$mri_perm_15t_mean_brain_ki                 ] <- NA
+dat_sub$mri_perm_15t_tot_ki                    [dat_sub$mri_perm_15t_tot_ki                     > 15   ] <- NA
+#dat_sub$mri_perm_3t_tot                        [dat_sub$mri_perm_3t_tot                            ] <- NA
+#dat_sub$mri_permeability                       [dat_sub$mri_permeability                           ] <- NA
+#dat_sub$mri_spectroscopy                       [dat_sub$mri_spectroscopy                           ] <- NA
+#dat_sub$mri_spectroscopy_cho_gpc_pch           [dat_sub$mri_spectroscopy_cho_gpc_pch               ] <- NA
+#dat_sub$mri_spectroscopy_cr_mrs                [dat_sub$mri_spectroscopy_cr_mrs                    ] <- NA
+#dat_sub$mri_spectroscopy_cr_pcr                [dat_sub$mri_spectroscopy_cr_pcr                    ] <- NA
+#dat_sub$mri_spectroscopy_gln                   [dat_sub$mri_spectroscopy_gln                       ] <- NA
+#dat_sub$mri_spectroscopy_glu                   [dat_sub$mri_spectroscopy_glu                       ] <- NA
+#dat_sub$mri_spectroscopy_glu_gln               [dat_sub$mri_spectroscopy_glu_gln                   ] <- NA
+#dat_sub$mri_spectroscopy_ins                   [dat_sub$mri_spectroscopy_ins                       ] <- NA
+#dat_sub$mri_spectroscopy_naa                   [dat_sub$mri_spectroscopy_naa                       ] <- NA
+#dat_sub$mri_spectroscopy_naa_naag              [dat_sub$mri_spectroscopy_naa_naag                  ] <- NA
+#dat_sub$mri_vol_atrophy                        [dat_sub$mri_vol_atrophy                            ] <- NA
+#dat_sub$mri_vol_gm                             [dat_sub$mri_vol_gm                                 ] <- NA
+#dat_sub$mri_vol_hippocampal                    [dat_sub$mri_vol_hippocampal                        ] <- NA
+dat_sub$mri_vol_intra_cranial_mm3              [dat_sub$mri_vol_intra_cranial_mm3               > 3000000   ] <- NA
+#dat_sub$mri_vol_lesion                         [dat_sub$mri_vol_lesion                             ] <- NA
+#dat_sub$mri_vol_total_brain                    [dat_sub$mri_vol_total_brain                        ] <- NA
+#dat_sub$mri_vol_wm                             [dat_sub$mri_vol_wm                                 ] <- NA
+#dat_sub$mri_vol_wm_jim                         [dat_sub$mri_vol_wm_jim                             ] <- NA
+dat_sub$mri_vol_wm_ucd                         [dat_sub$mri_vol_wm_ucd                          > 130000   ] <- NA
+#dat_sub$npsy_attention_t                       [dat_sub$npsy_attention_t                           ] <- NA
+#dat_sub$npsy_boston_t                          [dat_sub$npsy_boston_t                              ] <- NA
+#dat_sub$npsy_boston_tot_correct                [dat_sub$npsy_boston_tot_correct                    ] <- NA
+#dat_sub$npsy_clock_cutoff                      [dat_sub$npsy_clock_cutoff                          ] <- NA
+#dat_sub$npsy_clock_tot                         [dat_sub$npsy_clock_tot                             ] <- NA
+#dat_sub$npsy_dig_sym_t                         [dat_sub$npsy_dig_sym_t                             ] <- NA
+#dat_sub$npsy_dig_sym_tot                       [dat_sub$npsy_dig_sym_tot                           ] <- NA
+#dat_sub$npsy_ds_tot_for_back                   [dat_sub$npsy_ds_tot_for_back                       ] <- NA
+#dat_sub$npsy_ds_tot_t                          [dat_sub$npsy_ds_tot_t                              ] <- NA
+#dat_sub$npsy_education                         [dat_sub$npsy_education                             ] <- NA
+#dat_sub$npsy_executive_t                       [dat_sub$npsy_executive_t                           ] <- NA
+#dat_sub$npsy_faq_score                         [dat_sub$npsy_faq_score                             ] <- NA
+#dat_sub$npsy_fas_t                             [dat_sub$npsy_fas_t                                 ] <- NA
+#dat_sub$npsy_fas_tot                           [dat_sub$npsy_fas_tot                               ] <- NA
+#dat_sub$npsy_ft_dom_ave                        [dat_sub$npsy_ft_dom_ave                            ] <- NA
+#dat_sub$npsy_ft_dom_ave_t                      [dat_sub$npsy_ft_dom_ave_t                          ] <- NA
+#dat_sub$npsy_ft_nondom_ave                     [dat_sub$npsy_ft_nondom_ave                         ] <- NA
+#dat_sub$npsy_ft_nondom_ave_t                   [dat_sub$npsy_ft_nondom_ave_t                       ] <- NA
+#dat_sub$npsy_gdi                               [dat_sub$npsy_gdi                                   ] <- NA
+#dat_sub$npsy_hvlt_delay_raw_tot                [dat_sub$npsy_hvlt_delay_raw_tot                    ] <- NA
+#dat_sub$npsy_hvlt_delay_t                      [dat_sub$npsy_hvlt_delay_t                          ] <- NA
+#dat_sub$npsy_hvlt_immed_raw_tot                [dat_sub$npsy_hvlt_immed_raw_tot                    ] <- NA
+#dat_sub$npsy_hvlt_immed_t                      [dat_sub$npsy_hvlt_immed_t                          ] <- NA
+#dat_sub$npsy_hvlt_rec_disc_index               [dat_sub$npsy_hvlt_rec_disc_index                   ] <- NA
+#dat_sub$npsy_hvlt_rec_disc_t                   [dat_sub$npsy_hvlt_rec_disc_t                       ] <- NA
+#dat_sub$npsy_language_t                        [dat_sub$npsy_language_t                            ] <- NA
+#dat_sub$npsy_memory_t                          [dat_sub$npsy_memory_t                              ] <- NA
+#dat_sub$npsy_mmse                              [dat_sub$npsy_mmse                                  ] <- NA
+#dat_sub$npsy_mmse_t                            [dat_sub$npsy_mmse_t                                ] <- NA
+#dat_sub$npsy_overall_t                         [dat_sub$npsy_overall_t                             ] <- NA
+dat_sub$npsy_peg_dom_t                         [dat_sub$npsy_peg_dom_t                         > 90    ] <- NA
+#dat_sub$npsy_peg_dom_time                      [dat_sub$npsy_peg_dom_time                          ] <- NA
+dat_sub$npsy_peg_nondom_t                      [dat_sub$npsy_peg_nondom_t                      > 80    ] <- NA
+dat_sub$npsy_peg_nondom_time                   [dat_sub$npsy_peg_nondom_time                   > 250    ] <- NA
+#dat_sub$npsy_processing_t                      [dat_sub$npsy_processing_t                          ] <- NA
+#dat_sub$npsy_rcft_copy                         [dat_sub$npsy_rcft_copy                             ] <- NA
+#dat_sub$npsy_rcft_delay_recall                 [dat_sub$npsy_rcft_delay_recall                     ] <- NA
+#dat_sub$npsy_rcft_delay_recall_t               [dat_sub$npsy_rcft_delay_recall_t                   ] <- NA
+#dat_sub$npsy_rcft_imm_recall                   [dat_sub$npsy_rcft_imm_recall                       ] <- NA
+#dat_sub$npsy_rcft_imm_recall_t                 [dat_sub$npsy_rcft_imm_recall_t                     ] <- NA
+#dat_sub$npsy_rcft_recog                        [dat_sub$npsy_rcft_recog                            ] <- NA
+#dat_sub$npsy_rcft_recog_t                      [dat_sub$npsy_rcft_recog_t                          ] <- NA
+#dat_sub$npsy_strp_color_score                  [dat_sub$npsy_strp_color_score                      ] <- NA
+#dat_sub$npsy_strp_color_score_t                [dat_sub$npsy_strp_color_score_t                    ] <- NA
+#dat_sub$npsy_strp_colorword_score              [dat_sub$npsy_strp_colorword_score                  ] <- NA
+#dat_sub$npsy_strp_colorword_score_t            [dat_sub$npsy_strp_colorword_score_t                ] <- NA
+#dat_sub$npsy_strp_cw_interference              [dat_sub$npsy_strp_cw_interference                  ] <- NA
+#dat_sub$npsy_strp_cw_interference_t            [dat_sub$npsy_strp_cw_interference_t                ] <- NA
+#dat_sub$npsy_strp_word_score                   [dat_sub$npsy_strp_word_score                       ] <- NA
+#dat_sub$npsy_strp_word_score_t                 [dat_sub$npsy_strp_word_score_t                     ] <- NA
+#dat_sub$npsy_sym_srch_t                        [dat_sub$npsy_sym_srch_t                            ] <- NA
+#dat_sub$npsy_sym_srch_tot                      [dat_sub$npsy_sym_srch_tot                          ] <- NA
+#dat_sub$npsy_wcst_cat                          [dat_sub$npsy_wcst_cat                              ] <- NA
+#dat_sub$npsy_wcst_cat_percent                  [dat_sub$npsy_wcst_cat_percent                      ] <- NA
+#dat_sub$npsy_wcst_con_resp                     [dat_sub$npsy_wcst_con_resp                         ] <- NA
+#dat_sub$npsy_wcst_con_resp_t                   [dat_sub$npsy_wcst_con_resp_t                       ] <- NA
+#dat_sub$npsy_wcst_pers_err                     [dat_sub$npsy_wcst_pers_err                         ] <- NA
+#dat_sub$npsy_wcst_pers_err_t                   [dat_sub$npsy_wcst_pers_err_t                       ] <- NA
+#dat_sub$npsy_wcst_pers_resp                    [dat_sub$npsy_wcst_pers_resp                        ] <- NA
+#dat_sub$npsy_wcst_pers_resp_t                  [dat_sub$npsy_wcst_pers_resp_t                      ] <- NA
+#dat_sub$npsy_wcst_tot_err                      [dat_sub$npsy_wcst_tot_err                          ] <- NA
+#dat_sub$npsy_wcst_tot_err_t                    [dat_sub$npsy_wcst_tot_err_t                        ] <- NA
+dat_sub$npsy_wrat_t                            [dat_sub$npsy_wrat_t                             > 80   ] <- NA
+dat_sub$npsy_wrat_tot                          [dat_sub$npsy_wrat_tot                           > 60   ] <- NA
+
+```
+
+Plot again
+
+```{r chunk-014, fig.height = 4, fig.width = 10}
+# var_list_plot <-
+#   c(Var$list$var_npsy, Var$list$var_fl_csf, Var$list$var_fl_plasma)
+
+par(mfrow=c(1,3))
+for (i_plot in 1:length(var_list_plot)) {
+  ## i_plot = 1
+  #if (i_plot > 3) {next}
+
+  if( all(is.na(dat_sub[[ var_list_plot[i_plot] ]])) ) {
+    next
+  }
+
+  plot(
+    x     = 1:nrow(dat_sub)
+  , y     = dat_sub[[ var_list_plot[i_plot] ]]
+  , type  = "p"
+  , main  = paste0("After: ", var_list_plot[i_plot])
+  , xlab  = ""
+  , ylab  = ""
+  , col   = dat_sub$dx_current
+  , pch   = 20  #3
+  , xlim  = c(1, nrow(dat_sub) * 1.2)
+  )
+  text(
+    x     = 1:nrow(dat_sub)
+  , y     = dat_sub[[ var_list_plot[i_plot] ]]
+  , labels = 1:nrow(dat_sub)
+  , pos   = 4 # 1 = below, 2 = left, 3 = above, 4 = right
+  )
+}
+```
+
+## Plot data distributions
+
+See `out/plot_medians_*.png` plots.
+
+```{r}
+
+# log2 versions
+for (n_var in str_subset(names(dat_sub), pattern = "^fl_")) {
+  dat_sub[, n_var ] <-  # paste0(n_var, "_log2")
+    e_log_shift(dat_sub[, n_var])
+
+  #labelled::var_label(dat_sub[, paste0(n_var, "_log2") ]) <-
+  #  paste("log2", labelled::var_label( dat_sub[, n_var] ))
+}
+
+```
+
+```{r}
+#| fig-width:  12
+#| fig-height: 14
+
+for (i_var_group in seq_along(var_groups)) {
+  ## i_var_group = 1
+
+  print(paste0(var_groups[i_var_group], "                ===================="))
+
+  p_list <- list()
+
+  for (i_var in seq_along(Var[["list"]][[ var_groups[i_var_group] ]])) {
+    ## i_var = 1
+
+    var_this <- Var[["list"]][[ var_groups[i_var_group] ]][i_var]
+
+    print(paste0(var_this, "                ----------"))
+
+    if (
+      (length(var_this) == 0)           |
+      all(is.na(dat_sub[[ var_this ]]))
+    ) {
+      next
+    }
+
+    p_list[[ i_var ]] <-
+      e_plot_compare_medians(
+        dat_plot            = dat_sub |> tidyr::drop_na(var_this) |> dplyr::mutate(dx_current = dx_current |> fct_drop())
+      , var_response        = var_this
+      , var_groups          = "dx_current"
+      #, label_response      = labelled::var_label(dat_mtcars_e$mpg)
+      #, label_groups        = labelled::var_label(dat_mtcars_e$cyl)
+      , plot_title          = var_this
+      , plot_subtitle       = "Comparison of medians"
+      , comparisons         = NULL #c("Control", "Sweden")) #"all"
+      , cm_method           = "wilcox.test"
+      , cm_p.adjust.method  = "holm"
+      , cm_dot              = "median"
+      , cm_fun              = "median_iqr"
+      , cm_error.plot       = "errorbar"
+      , sw_add              = "dotplot"
+      , sw_caption_desc     = TRUE
+      )
+
+
+  } # i_var
+
+  if (length(p_list) == 0) { next }
+
+  p_arranged <-
+    cowplot::plot_grid(
+      plotlist  = p_list
+    , nrow      = 3
+    , ncol      = 4
+    , labels    = "AUTO"
+    )
+
+  #p_arranged %>% print()
+
+  ggsave(
+      paste0("out/plot_medians_VCI_", var_groups[i_var_group], ".png")
+    , plot   = p_arranged
+    , width  = 15
+    , height = 12    #4*ceiling(length(Var[["list"]][[ var_groups[i_var_group] ]])/2)
+    ## png, jpeg
+    , dpi    = 300
+    , bg     = "white"
+    ## pdf
+    #, units  = "in"
+    #, useDingbats = FALSE
+    )
+
+} # i_var_group
+```
+
+# Tables and plots
+
+## Demographic summaries
+
+```{r chunk-029, results='asis', echo=TRUE}
+dat_sub |>
+  mutate(
+    dx_current = dx_current |> fct_drop()
+  ) |>
+  pull(dx_current) |>
+  table() |>
+  as.data.frame() |>
+  t() |>
+  as.data.frame()
+  # |>
+  # readr::write_csv(
+  #   file = "out/tab_dx_current_freq.csv"
+  # , col_names = FALSE
+  # )
+
+table1_out <-
+  dat_sub |>
+  gtsummary::tbl_summary(
+    by           = "dx_current"        # use gtsummary::tbl_strata for more than 1
+  # , label        = NULL                          # automatically uses the label attribute
+  # , statistic    = NULL
+  # , digits       = NULL
+  # , type         = NULL
+  # , value        = NULL
+  # , missing      = NULL
+  # , missing_text = NULL
+  # , sort         = NULL
+  # , percent      = NULL
+  , include      = Var |> unlist() |> unique() |> sort()
+  ) |>
+  gtsummary::add_p()          |>  # add p-values to the output comparing values across groups
+  #gtsummary::add_q()          |>  # add a column of q values to control for multiple comparisons
+  gtsummary::bold_p(t = 0.05, q = FALSE) |> # Bold significant p-values or q-values
+  #gtsummary::add_difference() |>  # add column for difference between two group, confidence interval, and p-value
+  #gtsummary::add_ci()         |>  # add confidence intervals
+  gtsummary::add_overall()    |>  # add a column with overall summary statistics
+  gtsummary::add_stat_label() |>  # add label for the summary statistics shown in each row
+  gtsummary::add_n()          |>  # add a column with N (or N missing) for each variable
+  gtsummary::bold_labels()    |>  # bold variable name labels
+  gtsummary::italicize_levels() |> # italicize levels
+  gtsummary::modify_caption("Table title")
+# print to Viewer
+table1_out
+# export to Excel
+table1_out |>
+  gtsummary::as_hux_xlsx(file = paste0("out/tab1_vars", "_", "all", ".xlsx"))
+```
+
+## Remove variables that greatly differ between VCI and Sweden
+
+```{r}
+# var_VCI_Sweden_different_list <-
+#   c(
+#     "fl_angio_csf_bfgf"
+#   , "fl_angio_csf_flt_1"
+#   , "fl_angio_csf_plgf"
+#     "fl_angio_csf_tie2"
+#   , "fl_angio_csf_vegf_a"
+#   , "fl_angio_csf_vegf_c"
+#   , "fl_angio_csf_vegf_d"
+#   , "fl_angio_plasma_bfgf"
+#   , "fl_angio_plasma_flt_1"
+#   , "fl_angio_plasma_plgf"
+#   , "fl_angio_plasma_tie2"
+#   , "fl_angio_plasma_vegf_a"
+#   , "fl_angio_plasma_vegf_c"
+#   , "fl_angio_plasma_vegf_d"
+#   , "fl_cyto_csf_ifn_g"
+#   , "fl_cyto_csf_il_10"
+#   , "fl_cyto_csf_il_12p70"
+#   , "fl_cyto_csf_il_13"
+#   , "fl_cyto_csf_il_1b"
+#   , "fl_cyto_csf_il_2"
+#   , "fl_cyto_csf_il_4"
+#   , "fl_cyto_csf_il_6"
+#   , "fl_cyto_csf_il_8"
+#   , "fl_cyto_csf_tnf_a"
+#   , "fl_cyto_plasma_ifn_g"
+#   , "fl_cyto_plasma_il_10"
+#   , "fl_cyto_plasma_il_12p70"
+#   , "fl_cyto_plasma_il_13"
+#   , "fl_cyto_plasma_il_1b"
+#   , "fl_cyto_plasma_il_2"
+#   , "fl_cyto_plasma_il_4"
+#   , "fl_cyto_plasma_il_6"
+#   , "fl_cyto_plasma_il_8"
+#   , "fl_cyto_plasma_tnf_a"
+#   , "fl_msd_csf_mmp_1"
+#   , "fl_msd_csf_mmp_10"
+#   , "fl_msd_csf_mmp_2"
+#   , "fl_msd_csf_mmp_3"
+#   , "fl_msd_csf_mmp_9"
+#   , "fl_msd_plasma_mmp_1"
+#   , "fl_msd_plasma_mmp_10"
+#   , "fl_msd_plasma_mmp_2"
+#   , "fl_msd_plasma_mmp_3"
+#   , "fl_msd_plasma_mmp_9"
+#   , "fl_simoa_csf_n2pb_gfap"
+#   , "fl_simoa_csf_n2pb_nfl"
+#   , "fl_simoa_csf_n4pe_nfl"
+#   , "fl_simoa_csf_nfl"
+#   , "fl_simoa_csf_plgf"
+#   , "fl_simoa_edta_plasma_n4pe_nfl"
+#   , "fl_simoa_edta_plasma_nfl"
+#   , "fl_simoa_edta_plasma_plgf"
+#   , "fl_simoa_heparin_plasma_n4pe_nfl"
+#   , "fl_simoa_heparin_plasma_nfl"
+#   , "fl_simoa_heparin_plasma_plgf"
+#   , "fl_simoa_plasma_n2pb_gfap"
+#   )
+#
+# var_VCI_Sweden_different_list
+```
+
+```{r}
+
+# # remove different variables from lists
+# for (n_var_list in var_groups) {
+#   Var[["list"]][[ n_var_list ]] <-
+#     Var[["list"]][[ n_var_list ]][ Var[["list"]][[ n_var_list ]] %notin% var_VCI_Sweden_different_list ]
+# }
+```
+
+## --------------------------------------------------------------------------------
+
+# Random forest, which fluid variable help predict DX
+
+-   Keep observations with at least 50% of the variables non-NA
+-   Impute the missing values
+
+```{r chunk-044}
+library(doParallel)  # for %dopar% operator
+num_cores <- 6 # length(var_groups)
+#num_cores <- parallel::detectCores() - 2
+doParallel::registerDoParallel(num_cores)
+
+tictoc::tic(msg = "Timer") # start timer
+
+## don't prespecify outer "results" list
+
+results <-
+  foreach::foreach(
+    n_var_group = var_groups
+  #, .combine =                             # default is a list
+  , .inorder = TRUE                         # FALSE is faster
+  , .packages = c("erikmisc", "tidyverse", "labelled", "patchwork", "randomForestSRC")  # character vector of packages that the tasks depend on
+  , .export = NULL                          # character vector of variables to export
+  #) %do% # sequential
+  ) %dopar%  # parallel
+  {
+
+#out_rf_results <- list()
+#for (n_var_group in var_groups) {
+  ## n_var_group = var_groups[1]
+
+  this_result <- list()
+  #out_rf_results[[ n_var_group ]] <- list()
+  for (n_dx_group in dx_groups) {
+    ## n_dx_group = dx_groups[5]
+    this_result[[ n_dx_group ]] <- list()
+    #out_rf_results[[ n_var_group ]][[ n_dx_group ]] <- list()
+
+    text_var_dx <- paste0(n_var_group, ",  ", n_dx_group)
+
+    print("")
+    print("")
+    print("")
+    print(paste0(
+      "RF Training:  "
+    , n_var_group
+    , ",  "
+    , n_dx_group
+    , "  ########################################"
+    ))
+
+
+    dat_rf_class <-
+      dat_sub |>
+      dplyr::select(
+        tidyselect::all_of(n_dx_group)
+      , tidyselect::all_of(Var[["list"]][[ n_var_group ]])
+      ) |>
+      dplyr::rename(
+        "dx_current" = n_dx_group
+      ) |>
+      dplyr::rowwise() |>
+      dplyr::mutate(
+        prop_complete = mean(!is.na(dplyr::across(tidyselect::everything())))
+      ) |>
+      dplyr::ungroup() |>
+      dplyr::filter(
+        # keep observations where at least 50% have data across columns
+        prop_complete >= 0.50
+      #, dx_current %notin% "Sweden"
+      , !is.na(dx_current)
+      ) |>
+      dplyr::select(
+        -prop_complete
+      ) |>
+      dplyr::mutate(
+        dx_current = dx_current |> forcats::fct_drop()
+      ) |>
+      as.data.frame()
+
+    col_prop_complete <- colMeans(!is.na(dat_rf_class))
+
+    dat_rf_class <-
+      dat_rf_class |>
+      dplyr::select(
+        dx_current
+        # keep variables where at least 50% have data across observations (already filtered)
+      ,  tidyselect::all_of( names(col_prop_complete)[col_prop_complete >= 0.50] )
+      )
+
+    dim(dat_rf_class)
+    table(dat_rf_class[, 1])
+
+    # missing either diagnosis or predictor variables, skip
+    if (ncol(dat_rf_class) < 2) {
+      out_rf_results[[ n_var_group ]][[ n_dx_group ]] <- NA
+      next
+    }
+
+
+    # dat_miss_impute_fast <-
+    #   randomForestSRC::impute(
+    #     data      = dat_rf_class
+    #   )
+    ## Random Forest Slow imputation mode is more accurate
+    #    uses randomForestSRC::rfsrc(na.action = "na.impute")
+    o_dat_rf_class_impute <-
+      randomForestSRC::rfsrc(
+        data      = dat_rf_class
+      , na.action = "na.impute"
+      )
+
+    ind_row_impute <-
+      which(!complete.cases(o_dat_rf_class_impute$xvar))
+
+    dat_rf_class_impute <-
+      o_dat_rf_class_impute$xvar
+    dat_rf_class_impute[ ind_row_impute, ] <-
+      o_dat_rf_class_impute$imputed.data
+
+
+    #dat_rf_class
+
+    p1 <-
+      e_plot_missing(
+        dat_plot       = dat_rf_class
+      , var_group      = "dx_current"
+      , sw_group_sort  = TRUE
+      #, var2_sort      = "prop_complete"
+      )
+    p2 <-
+      e_plot_missing(
+        dat_plot       = dat_rf_class_impute
+      , var_group      = "dx_current"
+      , sw_group_sort  = TRUE
+      #, var2_sort      = "prop_complete"
+      )
+
+    p_arranged <-
+      cowplot::plot_grid(
+        plotlist  = list(p1, p2)
+      , nrow      = 1
+      #, ncol      = 2
+      , labels    = "AUTO"
+      )
+
+    #p_arranged %>% print()
+
+    this_result[[ n_dx_group ]][[ "plot_missing" ]] <-
+    #out_rf_results[[ n_var_group ]][[ n_dx_group ]][[ "plot_missing" ]] <-
+      p_arranged
+
+    ggsave(
+        paste0("out/plot_rf_train__", n_dx_group, "_-_", n_var_group, "__missing",  ".png")
+      , plot   = p_arranged
+      , width  = 12
+      , height = 8
+      ## png, jpeg
+      , dpi    = 300
+      , bg     = "white"
+      ## pdf
+      #, units  = "in"
+      #, useDingbats = FALSE
+      )
+
+
+    # Perform RF
+    out_e_rf <-
+      e_rfsrc_classification(
+        dat_rf_class    = dat_rf_class_impute
+      , rf_y_var        = NULL  # if not specified, assumed to be first column
+      , rf_x_var        = NULL  # if not specified, assumed to be second through last columns
+      , sw_rfsrc_ntree  = 1000
+      , sw_alpha        = 0.20  # for subsample bootsample model selection and VIMP plot
+      )
+
+    this_result[[ n_dx_group ]][[ "out_e_rf" ]] <-
+    #out_rf_results[[ n_var_group ]][[ n_dx_group ]][[ "out_e_rf" ]] <-
+      out_e_rf
+
+    # # Compile summary plot
+    # text_formula <-
+    #   paste(as.character(out_e_rf$rf_formula)[c(2, 1, 3)], collapse = " ")
+    #   #|>
+    #   #stringr::str_wrap(width = 60)
+    #
+    # library(patchwork)
+    # plot_design <-
+    #   "AAAABB
+    #    AAAABB
+    #    CCCCDD
+    #    CCCCDD
+    #    EEEEEE
+    #    EEEEEE"
+    #
+    # # If selected model has x variables
+    # if (length(out_e_rf$rf_x_var_sel)) {
+    #   #this_result[[ n_dx_group ]][[ "plot_rf_train_all_summary" ]] <-
+    #   out_rf_results[[ n_var_group ]][[ n_dx_group ]][[ "plot_rf_train_all_summary" ]] <-
+    #     cowplot::plot_grid(out_e_rf$plot_o_class              ) +
+    #     cowplot::plot_grid(out_e_rf$plot_o_class_subsample    ) +
+    #     cowplot::plot_grid(out_e_rf$plot_o_class_sel          ) +
+    #     cowplot::plot_grid(out_e_rf$plot_o_class_sel_subsample) +
+    #     cowplot::plot_grid(plotlist = out_e_rf$plot_o_class_sel_ROC$plot_roc, nrow = 1) +
+    #     plot_layout(design = plot_design) +
+    #     plot_annotation(
+    #       title       = text_var_dx
+    #     , subtitle    = text_formula
+    #     , caption     = paste0("Overall AUC = ", round(out_e_rf$o_class_sel_AUC, 3))
+    #     , tag_levels  = "A"
+    #     )
+    # } else {
+    #   #this_result[[ n_dx_group ]][[ "plot_rf_train_all_summary" ]] <-
+    #   out_rf_results[[ n_var_group ]][[ n_dx_group ]][[ "plot_rf_train_all_summary" ]] <-
+    #     cowplot::plot_grid(out_e_rf$plot_o_class              ) +
+    #     cowplot::plot_grid(out_e_rf$plot_o_class_subsample    ) +
+    #     #cowplot::plot_grid(out_e_rf$plot_o_class_sel          ) +
+    #     #cowplot::plot_grid(out_e_rf$plot_o_class_sel_subsample) +
+    #     #cowplot::plot_grid(plotlist = out_e_rf$plot_o_class_sel_ROC$plot_roc, nrow = 1) +
+    #     plot_spacer() +
+    #     plot_spacer() +
+    #     plot_spacer() +
+    #     plot_layout(design = plot_design) +
+    #     plot_annotation(
+    #       title       = text_var_dx
+    #     , subtitle    = text_formula
+    #     , caption     = "No x variables selected"
+    #     , tag_levels  = "A"
+    #     )
+    # }
+
+    ggsave(
+        paste0("out/plot_rf_train__", n_dx_group, "_-_", n_var_group, "__all_summary",  ".png")
+      , plot   = this_result[[ n_dx_group ]][[ "out_e_rf" ]][[ "plot_rf_train_all_summary" ]]
+      #, plot   = out_rf_results[[ n_var_group ]][[ n_dx_group ]][[ "out_e_rf" ]][[ "plot_rf_train_all_summary" ]]
+      , width  = 16
+      , height = 16
+      ## png, jpeg
+      , dpi    = 300
+      , bg     = "white"
+      ## pdf
+      #, units  = "in"
+      #, useDingbats = FALSE
+      )
+
+    out_save <-
+      this_result[[ n_dx_group ]]
+      #out_rf_results[[ n_var_group ]][[ n_dx_group ]]
+
+    save(
+      out_save
+    , file = paste0("out/RData__", n_dx_group, "_-_", n_var_group, "__results", ".RData")
+    )
+
+    ## Do not save result
+    this_result[[ n_dx_group ]] <-
+    #out_rf_results[[ n_var_group ]][[ n_dx_group ]] <-
+      NULL
+
+  } # n_dx_group
+#} # n_var_group
+
+  return(this_result)
+} # foreach
+
+tictoc::toc() # end timer
+
+# explicitly close the implicitly created cluster
+doParallel::stopImplicitCluster()
+
+
+#save.image(
+#    file = "out/RF_Trained.RData"
+#  )
+
+```
+
+# Predictions
+
+```{r}
+
+## load(
+##   "out/RData__var_fl_all_-_dx_current_ADSIVDMX_Control.RData"
+## )
+##
+## dat_to_pred <-
+##   dat_sub |>
+##   dplyr::filter(
+##     I_Sweden
+##   ) |>
+##   dplyr::select(
+##     ID
+##   , tidyselect::all_of(out_save$out_e_rf$o_class_sel$xvar.names)
+##   ) |>
+##   tidyr::drop_na()
+##
+##
+## out_save$out_e_rf$o_class_sel
+##
+## out_e_rf_pred <-
+##   predict(
+##     object        = out_save$out_e_rf$o_class_sel
+##   , newdata       = dat_sub |> dplyr::filter(I_Sweden)
+##   )
+##
+## out_e_rf_pred$predicted
+## out_e_rf_pred$class
+##
+## dat_to_pred <-
+##   dat_to_pred |>
+##   dplyr::bind_cols(
+##     out_e_rf_pred$predicted
+##   , tibble::tibble(class = out_e_rf_pred$class)
+##   ) |>
+##   dplyr::select(
+##     ID
+##   , class
+##   , tidyselect::all_of(colnames(out_e_rf_pred$predicted))
+##   , tidyselect::everything()
+##   )
+##
+## readr::write_csv(
+##     dat_to_pred
+##   , file = "out/dat_Sweden_pred__var_fl_all_-_dx_current_ADSIVDMX_Control.csv"
+##   )
+##
+## fl_angio_csf_flt_1
+## fl_angio_csf_plgf
+## fl_angio_csf_vegf_a
+## fl_cyto_csf_il_8
+## fl_cyto_plasma_il_6
+## fl_cyto_plasma_tnf_a
+## fl_msd_csf_mmp_1
+## fl_msd_csf_mmp_10
+## fl_msd_csf_mmp_9
+## fl_msd_plasma_mmp_1
+## fl_msd_plasma_mmp_3
+
+
+```

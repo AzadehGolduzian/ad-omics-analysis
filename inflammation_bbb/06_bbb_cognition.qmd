@@ -1,0 +1,187 @@
+---
+title: "Relationship between BBB permeability and cognition for paper"
+author: "Azadeh"
+format: html
+editor: visual
+---
+
+
+
+```{r chunk-003}
+library(erikmisc)
+library(tidyverse)
+library(labelled)
+library(corrplot)
+library(broom)
+# install.packages("dunn.test")
+library(dunn.test)
+library(ggpubr)
+# devtools::install_github("vincentarelbundock/modelsummary")
+# install.packages("modelsummary")
+library(modelsummary)
+# remotes::install_github("erikerhardt/erikmisc")  # install once if needed
+
+#dir.create("out_new", showWarnings = FALSE)
+```
+
+```{r}
+
+load("dat_sub_Data_inflammation_analysis_paper_06052025.RData"
+     )
+load("dat_sub_and_Var_for_inflammation_analysis.RData")
+
+```
+
+# make this code simpler i can use anova
+
+```{r}
+# ---- packages ----
+library(dplyr)
+library(tidyr)
+library(purrr)
+library(broom)
+
+# data for demographics, before z-score scaling
+dat_sheet_demo <-
+  #dat_sheet
+  dat_sub
+
+dat_sheet <-
+  #dat_sheet %>%
+  dat_sub %>%
+  dplyr::mutate(
+    # to allow log transformation when wmhv==0
+  #  percent_wmhv  = percent_wmhv + 0.00001
+  #  fl_cyto_csf_il_4 = ifelse(fl_cyto_csf_il_4 == 0.001, NA, fl_cyto_csf_il_4)
+  #  across(tidyselect::all_of(c(Var$csf, Var$plasma, Var$mri)), e_log_shift, min_add = 1, base_log = 2)
+    across(tidyselect::all_of(c(Var$csf, Var$plasma, Var$mri)), scale)
+  , across(tidyselect::all_of(c(Var$csf, Var$plasma, Var$mri)), as.numeric)
+  )
+
+# ---- settings ----
+responses  <- c("npsy_executive_t","npsy_attention_t","npsy_memory_t","npsy_language_t")
+predictors <- c("fl_albumin_index_log2","mri_perm_3t_tot_log2")
+
+# p-value -> significance stars
+star <- function(p) symnum(p, corr = FALSE, na = FALSE,
+                           cutpoints = c(0, .001, .01, .05, .1, 1),
+                           symbols   = c("***","**","*","."," "))
+
+# ── Friendly short labels for axes ───────────────────────────────────────────
+resp_labels <- c(
+  "npsy_executive_t"  = "Executive Function\n(T-Score)",
+  "npsy_attention_t"  = "Attention\n(T-Score)",
+  "npsy_memory_t"     = "Memory\n(T-Score)",
+  "npsy_language_t"   = "Language\n(T-Score)"
+)
+pred_labels <- c(
+  "fl_albumin_index_log2"  = "Albumin Index (log2)",
+  "mri_perm_3t_tot_log2"   = "3T Permeability (log2)"
+)
+
+# ---- fit all 8 models -------------------------------------------------------
+results <-
+  tidyr::crossing(resp = responses, pred = predictors) |>
+  mutate(
+    formula = map2(resp, pred, ~ reformulate(.y, response = .x)),
+    fit     = map(formula, ~ lm(.x, data = dat_sheet_demo)),
+    fc      = map2(fit, pred, ~ erikmisc::e_plot_model_contrasts(
+                 fit               = .x,
+                 dat_cont          = dat_sheet_demo,
+                 choose_contrasts  = .y,
+                 sw_print          = FALSE,
+                 sw_table_in_plot  = FALSE,   # ← removes caption clutter
+                 sw_TWI_plots_keep = "singles",
+                 adjust_method     = "none"
+               )),
+    plot   = map2(fc, pred, ~ .x$plots[[.y]]),
+    interp = map2(fc, pred, ~ .x$interp[[.y]])
+  )
+
+# ---- coefficient table ------------------------------------------------------
+coef_table_all <-
+  results |>
+  mutate(coef_row = map2(fit, pred, ~ broom::tidy(.x) |>
+                           filter(term == .y) |>
+                           transmute(term, estimate, std.error,
+                                     statistic, p.value,
+                                     sig = as.character(star(p.value))))) |>
+  select(response = resp, predictor = pred, coef_row) |>
+  unnest(coef_row) |>
+  arrange(response, predictor)
+
+# ---- build plots ------------------------------------------------------------
+plots_named <- setNames(results$plot, paste(results$resp, "~", results$pred))
+
+journal_theme <- ggplot2::theme(
+  plot.title   = ggplot2::element_text(size = 11, face = "bold"),
+  axis.title.x = ggplot2::element_text(size = 10),
+  axis.title.y = ggplot2::element_text(size = 10),
+  axis.text    = ggplot2::element_text(size = 9),
+  plot.caption = ggplot2::element_blank(),              # ← hide caption entirely
+  plot.margin  = ggplot2::margin(t = 22, r = 5, b = 5, l = 5, unit = "pt")
+)
+
+# Apply theme + replace long axis labels with short ones
+plots_named <- imap(plots_named, function(p, nm) {
+  # extract resp and pred from name "resp ~ pred"
+  parts     <- stringr::str_split(nm, " ~ ")[[1]]
+  resp_name <- parts[1]
+  pred_name <- parts[2]
+
+  p +
+    journal_theme +
+    ggplot2::labs(
+      x = pred_labels[pred_name],
+      y = resp_labels[resp_name]
+    )
+})
+
+# ---- arrange 4×2 grid -------------------------------------------------------
+plot_order <- c(
+  "npsy_executive_t ~ fl_albumin_index_log2",
+  "npsy_executive_t ~ mri_perm_3t_tot_log2",
+  "npsy_attention_t ~ fl_albumin_index_log2",
+  "npsy_attention_t ~ mri_perm_3t_tot_log2",
+  "npsy_memory_t ~ fl_albumin_index_log2",
+  "npsy_memory_t ~ mri_perm_3t_tot_log2",
+  "npsy_language_t ~ fl_albumin_index_log2",
+  "npsy_language_t ~ mri_perm_3t_tot_log2"
+)
+
+ncol_cog <- 2
+nrow_cog <- 4
+w_cog    <- ncol_cog * PANEL_IN   # 9 in
+h_cog    <- nrow_cog * PANEL_IN   # 18 in
+
+combined_plot_cognition <- cowplot::plot_grid(
+  plotlist       = plots_named[plot_order],
+  labels         = "AUTO",
+  label_size     = 14,
+  label_fontface = "bold",
+  label_x        = 0.02,
+  label_y        = 0.995,
+  ncol           = ncol_cog,
+  nrow           = nrow_cog,
+  align          = "hv",
+  axis           = "tblr"
+)
+
+ggsave(
+  file.path("All_figures_for_paper", "plot_cognition_BBB.png"),
+  plot   = combined_plot_cognition,
+  width  = w_cog,
+  height = h_cog,
+  dpi    = 300,
+  bg     = "white"
+)
+
+message("Saved: plot_cognition_BBB.png | 8 panels | ", w_cog, "x", h_cog, " in")
+
+
+  
+```
+
+
+
+

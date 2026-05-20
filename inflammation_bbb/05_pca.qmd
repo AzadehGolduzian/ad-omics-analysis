@@ -1,0 +1,307 @@
+---
+title:        "PCA Composite Inflammatory Score"
+subtitle:     "Based on Hilmer, et al., (2022). *Blood-brain barrier disruption measured by albumin index correlates with inflammatory fluid biomarkers*"
+author:       Azadeh Golduzian
+date:         last-modified # today, now, last-modified
+date-format:  long          # full, long, medium, short, iso
+format:
+  html:
+    theme:                  litera
+    highlight-style:        atom-one
+    page-layout:            full
+    toc:                    true
+    toc-depth:              4
+    toc-location:           body
+    number-sections:        true
+    number-depth:           3
+    code-fold:              show
+    code-tools:
+      toggle:               true
+      caption:              "Code"
+      source:               false
+    code-overflow:          scroll
+    code-block-bg:          true
+    code-block-border-left: "#30B0E0"
+    df-print:               paged
+fig-width:                  8
+fig-height:                 6
+execute:
+  cache:    false
+  eval:     true
+  echo:     true
+---
+
+<!---
+# Compile commands in R:
+  setwd("/Users/azadehgolduzian/Dropbox/2024_ADRC/Analyses/202501_ADRC_Permeability")
+  fn_qmd <- "Golduzian_Rosenberg_ADRC_Inflammation_Analysis_5-PCA_20260408.qmd"
+  quarto::quarto_render(input = fn_qmd)
+-->
+
+```{r init, echo=FALSE}
+options(str   = strOptions(list.len = 1e3))
+options(knitr.kable.NA = '')
+my_seed <- 34567
+set.seed(my_seed)
+```
+
+--------------------------------------------------------------------------------
+
+# Approach
+
+PCA is run on 6 key BBB-related inflammatory biomarkers:
+
+- **Albumin Index** (CSF BBB permeability)
+- **3T MRI Permeability** (Ktrans)
+- **CSF GFAP** (astrocyte activation)
+- **IgG Index** (intrathecal immunoglobulin synthesis)
+- **CSF IL-8** (pro-inflammatory cytokine)
+- **CSF IL-6** (pro-inflammatory cytokine)
+
+Steps:
+
+1. Run PCA on complete cases (all 6 variables non-missing), variables centered and scaled.
+2. Extract PC1 scores.
+3. Compute Spearman correlation of PC1 with Albumin Index.
+4. If negative, flip PC1 so higher PC1 = more BBB disruption (same direction as Albumin).
+5. Correlate aligned PC1 with all 6 input variables and with diagnosis.
+6. Visualize loadings, biplot, and PC1 by diagnosis group.
+
+--------------------------------------------------------------------------------
+
+# Data Preliminaries
+
+```{r chunk-003}
+library(erikmisc)
+library(tidyverse)
+library(labelled)
+library(broom)
+library(ggplot2)
+library(ggpubr)
+library(patchwork)
+library(factoextra)   # for fviz_pca_biplot; install if needed: install.packages("factoextra")
+library(gt)
+library(gtsummary)
+
+dir.create("All_figures_for_paper", showWarnings = FALSE)
+```
+
+```{r chunk-load}
+load("/Users/azadehgolduzian/Dropbox/2024_ADRC/Data/Data_out/current/ADRC4_ADRC3_MarkVCID2_VCI_ALL.RData")
+load("dat_sub_Data_inflammation_analysis_paper_06052025.RData")
+load("dat_sub_and_Var_for_inflammation_analysis.RData")
+```
+
+#PCA
+```{r}
+# ════════════════════════════════════════════════════════════════════════════
+# PCA-A: CSF Composite Inflammatory Score for Qalb
+# ════════════════════════════════════════════════════════════════════════════
+
+# ── Step 1: CSF predictors only ( Qalb is the target) ─────
+vars_pca_csf <- c(
+    # "fl_msd_csf_mmp_1_log2"
+   "fl_msd_csf_mmp_2_log2"
+  , "fl_msd_csf_mmp_3_log2"
+  # , "fl_msd_csf_mmp_9_log2"
+  # , "fl_csf__ALL__mmp_10_log2"
+  
+  , "fl_angio_csf_tie2_log2"
+  # ,"fl_angio_csf_bfgf_log2"
+  
+  , "fl_csf__ALL__gfap_log2"
+  , "fl_csf__ALL__plgf_log2" 
+  # , "fl_csf__ALL__nfl_log2"
+  
+  # , "fl_csf__ALL__ptau_log2"
+  # , "fl_abeta_4240_ratio_log2"
+  
+  # , "fl_cyto_csf_il_6_log2"
+  # , "fl_cyto_csf_il_8_log2"
+  , "fl_cyto_csf_il_10_log2"
+)
+
+# ── Step 2: Complete cases ─────
+dat_pca_csf <-
+  dat_sub |>
+  select(ptid, fl_albumin_index_log2, all_of(vars_pca_csf)) |>
+  drop_na()
+
+cat("N for CSF PCA:", nrow(dat_pca_csf), "\n")
+
+# ── Step 3: Run PCA on z-scored predictors ──────────────────────────────────
+pca_csf <- prcomp(
+    dat_pca_csf |> select(all_of(vars_pca_csf))
+  , center = TRUE
+  , scale. = TRUE
+)
+
+# Variance explained
+print(summary(pca_csf))
+pc1_var_pct <- round(summary(pca_csf)$importance[2, 1] * 100, 1)
+cat("PC1 explains", pc1_var_pct, "% of variance\n")
+
+# Loadings 
+loadings_pc1 <- pca_csf$rotation[, 1]
+print(round(sort(loadings_pc1), 3))
+
+# ── Step 4: PC1 score IS the composite inflammation score ───────────────────
+dat_pca_csf$composite_csf <- pca_csf$x[, 1]
+
+# ── Step 5: Sign convention — flip if PC1 runs opposite to Qalb ─────────────
+# (PCA doesn't know which direction is "more inflammation")
+cor_pc1 <- cor(
+    dat_pca_csf$composite_csf
+  , dat_pca_csf$fl_albumin_index_log2
+  , method = "spearman"
+)
+
+if (cor_pc1 < 0) {
+  dat_pca_csf$composite_csf <- -dat_pca_csf$composite_csf
+  pca_csf$rotation[, 1]     <- -pca_csf$rotation[, 1]
+  cat("PC1 flipped: now high composite = high BBB disruption\n")
+}
+
+# ── Step 6: Plot composite score vs Albumin Index ───────────────────────────
+fit_lm   <- lm(fl_albumin_index_log2 ~ composite_csf, data = dat_pca_csf)
+r2_value <- summary(fit_lm)$r.squared
+cor_test <- cor.test(
+    dat_pca_csf$composite_csf
+  , dat_pca_csf$fl_albumin_index_log2
+  , method = "spearman"
+)
+
+plot_composite_csf <-
+  ggplot(dat_pca_csf, aes(x = composite_csf, y = fl_albumin_index_log2)) +
+  geom_point(alpha = 0.6, size = 2) +
+  geom_smooth(method = "lm", se = TRUE, color = "steelblue") +
+  labs(
+      title    = "CSF Composite Inflammatory Score vs Albumin Index"
+    , subtitle = sprintf(
+        "Spearman ρ = %.2f (p = %.3g) | R² = %.2f | n = %d | PC1 var = %.1f%%"
+      , cor_test$estimate, cor_test$p.value
+      , r2_value, nrow(dat_pca_csf), pc1_var_pct
+      )
+    , x = "CSF Composite Score (PC1)"
+    , y = "Albumin Index (log2)"
+  ) +
+  theme_bw()
+
+print(plot_composite_csf)
+
+# Save composite back to dat_sub for downstream use (Later)
+# dat_sub <- dat_sub |>
+#   left_join(dat_pca_csf |> select(ptid, composite_csf), by = "ptid")
+
+
+```
+
+```{r}
+vars_pca_plasma <- c(
+    # "fl_plasma__ALL__mmp_1_log2",
+    # "fl_plasma__ALL__mmp_2_log2",
+   "fl_plasma__ALL__mmp_3_log2"
+  # , "fl_plasma__ALL__mmp_9_log2"
+  # , "fl_plasma__ALL__mmp_10_log2"
+  # , "fl_plasma__ALL__bfgf_log2"
+  # , "fl_plasma__ALL__flt_1_log2"
+  # , "fl_plasma__ALL__tie2_log2"
+  # , "fl_plasma__ALL__vegf_a_log2"
+  # , "fl_plasma__ALL__vegf_c_log2"
+  # , "fl_plasma__ALL__vegf_d_log2"
+  # , "fl_cyto_heparin_plasma_ifn_g_log2"
+  # , "fl_plasma__ALL__il_1b_log2"
+  # , "fl_cyto_heparin_plasma_il_2_log2"
+  # , "fl_cyto_heparin_plasma_il_4_log2"
+  # , "fl_cyto_heparin_plasma_il_6_log2"
+  # , "fl_cyto_heparin_plasma_il_8_log2"
+  , "fl_cyto_heparin_plasma_il_10_log2"
+  # , "fl_cyto_heparin_plasma_il_12p70_log2"
+  # , "fl_cyto_heparin_plasma_il_13_log2"
+  # , "fl_cyto_heparin_plasma_tnf_a_log2"
+  # , "fl_plasma__ALL__nfl_log2"
+  # , "fl_plasma__ALL__plgf_log2"
+  # , "fl_plasma__ALL__gfap_log2"
+  # , "fl_plasma__ALL__abeta_40_log2"
+  # , "fl_plasma__ALL__abeta_42_log2"
+  # , "fl_plasma__ALL__ptau_181_log2"
+  # , "fl_plasma__ALL__ptau_217_log2"
+  # , "fl_serum_igg_log2"
+)
+
+
+# ── Step 2: Complete cases ─────
+dat_pca_csf <-
+  dat_sub |>
+  select(ptid, fl_albumin_index_log2, all_of(vars_pca_plasma)) |>
+  drop_na()
+
+cat("N for CSF PCA:", nrow(dat_pca_csf), "\n")
+
+# ── Step 3: Run PCA on z-scored predictors ──────────────────────────────────
+?prcomp
+pca_csf <- prcomp(
+    dat_pca_csf |> select(all_of(vars_pca_plasma))
+  , center = TRUE
+  , scale. = TRUE
+)
+
+# Variance explained
+print(summary(pca_csf))
+pc1_var_pct <- round(summary(pca_csf)$importance[2, 1] * 100, 1)
+cat("PC1 explains", pc1_var_pct, "% of variance\n")
+
+# Loadings 
+loadings_pc1 <- pca_csf$rotation[, 1]
+print(round(sort(loadings_pc1), 3))
+
+# ── Step 4: PC1 score IS the composite inflammation score ───────────────────
+dat_pca_csf$composite_csf <- pca_csf$x[, 1]
+
+# ── Step 5: Sign convention — flip if PC1 runs opposite to Qalb ─────────────
+
+cor_pc1 <- cor(
+    dat_pca_csf$composite_csf
+  , dat_pca_csf$fl_albumin_index_log2
+  , method = "spearman"
+)
+
+if (cor_pc1 < 0) {
+  dat_pca_csf$composite_csf <- -dat_pca_csf$composite_csf
+  pca_csf$rotation[, 1]     <- -pca_csf$rotation[, 1]
+  cat("PC1 flipped: now high composite = high BBB disruption\n")
+}
+
+# ── Step 6: Plot composite score vs Albumin Index ───────────────────────────
+fit_lm   <- lm(fl_albumin_index_log2 ~ composite_csf, data = dat_pca_csf)
+r2_value <- summary(fit_lm)$r.squared
+cor_test <- cor.test(
+    dat_pca_csf$composite_csf
+  , dat_pca_csf$fl_albumin_index_log2
+  , method = "spearman"
+)
+
+plot_composite_csf <-
+  ggplot(dat_pca_csf, aes(x = composite_csf, y = fl_albumin_index_log2)) +
+  geom_point(alpha = 0.6, size = 2) +
+  geom_smooth(method = "lm", se = TRUE, color = "steelblue") +
+  labs(
+      title    = "Plasma Composite Inflammatory Score vs Albumin Index"
+    , subtitle = sprintf(
+        "Spearman ρ = %.2f (p = %.3g) | R² = %.2f | n = %d | PC1 var = %.1f%%"
+      , cor_test$estimate, cor_test$p.value
+      , r2_value, nrow(dat_pca_csf), pc1_var_pct
+      )
+    , x = "Plasma Composite Score (PC1)"
+    , y = "Albumin Index (log2)"
+  ) +
+  theme_bw()
+
+print(plot_composite_csf)
+
+# Save composite back to dat_sub for downstream use (Later)
+# dat_sub <- dat_sub |>
+#   left_join(dat_pca_csf |> select(ptid, composite_csf), by = "ptid")
+
+```
+

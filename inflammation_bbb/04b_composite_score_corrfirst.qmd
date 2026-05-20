@@ -1,0 +1,828 @@
+---
+title:        "Composite Inflammatory Score: Correlation-First Approach"
+subtitle:     "Based on Hilmer, et al., (2022). *Blood-brain barrier disruption measured by albumin index correlates with inflammatory fluid biomarkers*"
+author:       Azadeh Golduzian
+date:         last-modified
+date-format:  long
+format:
+  html:
+    theme:                  litera
+    highlight-style:        atom-one
+    page-layout:            full
+    toc:                    true
+    toc-depth:              4
+    toc-location:           body
+    number-sections:        true
+    number-depth:           3
+    code-fold:              show     
+    code-tools:
+      toggle:               true
+      caption:              "Code"
+      source:               false
+    code-overflow:          scroll
+    code-block-bg:          true
+    code-block-border-left: "#30B0E0"
+    df-print:               paged
+fig-width:                  8
+fig-height:                 6
+execute:
+  cache:    false
+  eval:     true
+  echo:     true
+---
+
+<!---
+# Erik's compile commands in R:
+  setwd("D:/Dropbox/StatAcumen/consult/Authorship/2014_GaryRosenberg_UNM_NIH_VascularDementia_MRI/2024_ADRC/Analyses/202501_ADRC_Permeability")
+  fn_qmd <- "Golduzian_Rosenberg_ADRC_Inflammation_Analysis_4b-Composite_Inflammation_Score_CorrFirst_20260326.qmd"
+  quarto::quarto_render(input = fn_qmd)
+-->
+
+```{r init, echo=FALSE}
+options(str   = strOptions(list.len = 1e3))
+options(knitr.kable.NA = '')
+my_seed <- 34567
+set.seed(my_seed)
+
+# The development version from GitHub
+# install.packages("remotes")
+remotes::install_github("erikerhardt/erikmisc", force= TRUE)
+```
+
+--------------------------------------------------------------------------------
+
+# Approach
+
+
+**New strategy — 3 panels:**
+
+1. **Panel A:** Rank all biomarkers by |Spearman ρ| with Albumin Index AND Ktrans.
+   This shows which markers are biologically relevant to BBB disruption.
+
+2. **Panel B:** For each "top-K" set (take the top 1, top 2, … top K biomarkers
+   by correlation), compute how many subjects have complete data on all K.
+   This is the N-vs-quality trade-off curve.
+
+3. **Decision:** Pick a cutoff from Panel B that gives n ≥ ~60 with the
+   highest-correlated markers, then run backward BIC regression on that set.
+
+--------------------------------------------------------------------------------
+
+# Data Preliminaries
+    
+```{r chunk-003}
+library(erikmisc)
+library(tidyverse)
+library(labelled)
+library(broom)
+library(patchwork)
+
+dir.create("All_figures_for_paper",            showWarnings = FALSE)
+dir.create("All_figures_for_paper/composite",  showWarnings = FALSE)
+```
+
+
+
+```{r chunk-004}
+
+load("dat_sub_Data_inflammation_analysis_paper_06052025.RData")
+load("dat_sub_and_Var_for_inflammation_analysis.RData")
+
+```
+
+
+
+```{r chunk-005}
+
+var_resp_albumin <- "fl_albumin_index_log2"
+var_resp_ktrans  <- "mri_perm_3t_tot_log2"
+
+# Exclude response variables from candidate pool
+vars_exclude <-
+  c( var_resp_albumin
+  , var_resp_ktrans
+  , "mri_perm_3t_tot"       # raw Ktrans
+  , "fl_igg_index_log2"     # excluded per earlier decision
+  , "fl_csf_igg_log2"       # excluded per earlier decision
+  )
+
+list_var_covar <-
+  c(Var$csf, Var$plasma, Var$mri) |>
+  unique()
+
+list_var_covar <- list_var_covar[ list_var_covar %notin% vars_exclude ]
+
+cat("Candidate predictors:", length(list_var_covar), "\n")
+```
+
+
+```{r chunk-006}
+# Z-score predictors; keep responses on original log2 scale
+dat_sheet_demo <- dat_sub
+
+dat_sheet <-
+  dat_sub |>
+  dplyr::mutate(
+    across(tidyselect::all_of(c(Var$csf, Var$plasma, Var$mri)), scale)
+  , across(tidyselect::all_of(c(Var$csf, Var$plasma, Var$mri)), as.numeric)
+  )
+
+for (n_label in as.character(unlist(Var))) {
+  labelled::var_label(dat_sheet[[ n_label ]]) <-
+    labelled::var_label(dat_sheet_demo[[ n_label ]])
+}
+```
+
+--------------------------------------------------------------------------------
+
+# Panel A — Biomarker Correlation Ranking
+
+```{r}
+
+compute_corr_rank <- function(dat, candidates, resp_var) {
+  results <- list()
+  for (v in candidates) {
+    tmp <- dat |> select(all_of(c(resp_var, v))) |> drop_na()
+    if (nrow(tmp) < 5) next
+    ct <- cor.test(tmp[[resp_var]], tmp[[v]], method = "spearman", exact = FALSE)
+    results[[v]] <- tibble(variable = v, rho = ct$estimate, n_pairwise = nrow(tmp))
+  }
+  bind_rows(results) |>
+  mutate(
+    abs_rho  = abs(rho)
+  , response = resp_var
+  ) |>
+  arrange(desc(abs_rho))
+}
+
+corr_albumin <- compute_corr_rank(dat_sheet, list_var_covar, var_resp_albumin)
+corr_ktrans  <- compute_corr_rank(dat_sheet, list_var_covar, var_resp_ktrans)
+
+```
+
+
+```{r chunk-008, fig.height=10, fig.width=14}
+
+#keep only biomarkers with individual n >= 60
+n_min_individual <- 60
+corr_albumin <- corr_albumin |> filter(n_pairwise >= n_min_individual)
+corr_ktrans  <- corr_ktrans  |> filter(n_pairwise >= n_min_individual)
+
+print(corr_albumin, n = 20)
+print(corr_ktrans,  n = 20)
+
+# Plot
+top_n_show <- 20
+
+make_corr_plot <- function(corr_df, title_str) {
+  corr_df |>
+  slice_head(n = top_n_show) |>
+  mutate(
+    variable  = variable |> str_replace_all("_log2$", "") |> str_replace_all("_", " ")
+  , direction = if_else(rho >= 0, "Positive", "Negative")
+  ) |>
+  ggplot(aes(x = abs_rho, y = reorder(variable, abs_rho), fill = direction)) +
+  theme_bw(base_size = 11) +
+  geom_col(alpha = 0.85) +
+  geom_text(aes(label = paste0("  n=", n_pairwise)), hjust = -0.1, size = 3, colour = "gray30") +
+  scale_x_continuous(limits = c(0, 0.75), expand = expansion(mult = c(0, 0.15))) +
+  scale_fill_manual(values = c("Positive" = "#2166AC", "Negative" = "#D6604D")) +
+  labs(title = title_str, x = "|Spearman ρ|", y = NULL, fill = "Direction",
+       caption = "Stars: * p<0.05  ** p<0.01  *** p<0.001  |  n = pairwise complete obs") +
+  theme(legend.position = "bottom", plot.caption = element_text(hjust = 0),
+        axis.text.y = element_text(size = 9))
+}
+
+p_corr_albumin <- make_corr_plot(corr_albumin, "Spearman ρ with Albumin Index (BBB)")
+p_corr_ktrans  <- make_corr_plot(corr_ktrans,  "Spearman ρ with Ktrans (MRI Permeability)")
+
+p_corr_combined <-
+  p_corr_albumin + p_corr_ktrans +
+  plot_annotation(title = "Panel A — Biomarker Correlation Ranking", tag_levels = "A")
+
+p_corr_combined |> print()
+
+ggsave("All_figures_for_paper/composite/PanelA_corr_ranking.png",
+       plot = p_corr_combined, width = 14, height = 10, dpi = 300, bg = "white")
+```
+
+-----------------------------------------------------------------
+--------------------------------------------------------------------------------
+
+# Decision Point
+
+Look at Panel A  then set `k_albumin` and `k_ktrans` below.
+
+
+```{r chunk-011}
+
+# Run Erik's complete-by-variable plot on the correlation-ranked candidates
+result_albumin <- e_plot_complete_by_variable_subset(
+    dat              = dat_sheet
+  , var_list         = c(var_resp_albumin, corr_albumin$variable)
+  , var_resp         = var_resp_albumin
+  , sw_plot_complete = 20
+)
+
+
+#  set k after looking at the table above ----
+k_albumin <- 19 # adjust this
+
+predictor_vars_albumin <- result_albumin$var_names[[ k_albumin ]]
+predictor_vars_albumin <- predictor_vars_albumin[ predictor_vars_albumin != var_resp_albumin ]
+cat("Chosen variables:", paste(chosen_albumin, collapse = ", "), "\n")
+cat("Complete-case N:", result_albumin$n_complete[ k_albumin ], "\n")
+
+# For Ktrans
+
+result_ktrans <- e_plot_complete_by_variable_subset(
+    dat              = dat_sheet
+  , var_list         = c(var_resp_ktrans, corr_ktrans$variable)
+  , var_resp         = var_resp_ktrans
+  , sw_plot_complete = 20
+)
+
+
+# set k after looking at the table above ----
+k_ktrans <- 20   # adjust this
+
+predictor_vars_ktrans <- result_ktrans$var_names[[ k_ktrans ]]
+predictor_vars_ktrans <- predictor_vars_ktrans[ predictor_vars_ktrans != var_resp_ktrans ]
+cat("Chosen variables:", paste(chosen_ktrans, collapse = ", "), "\n")
+cat("Complete-case N:", result_ktrans$n_complete[ k_ktrans ], "\n")
+
+```
+
+--------------------------------------------------------------------------------
+
+# Backward AIC Regression
+
+## Albumin Index model
+
+```{r chunk-013}
+
+
+dat_lm_albumin <-
+  dat_sheet |>
+  dplyr::select(
+    Y   = tidyselect::all_of(var_resp_albumin)
+  , age
+  , sex
+  , tidyselect::all_of(predictor_vars_albumin)
+  ) |>
+  tidyr::drop_na() |>
+  tibble::as_tibble()
+
+cat("Albumin model — complete observations:", nrow(dat_lm_albumin), "\n")
+
+fit_albumin_full <-
+  lm(
+    formula = as.formula(
+      paste0("Y ~  ", paste(predictor_vars_albumin, collapse = " + "))
+    )
+  , data = dat_lm_albumin
+  )
+
+fit_albumin_red <-
+  stats::step(
+    object    = fit_albumin_full
+  , direction = "backward"
+  , trace     = 0
+  , k         =2   # AIC
+  )
+
+
+cat("\n=== Reduced Albumin Model (BIC backward) ===\n")
+summary(fit_albumin_red)
+
+
+
+
+```
+
+## Ktrans model
+
+```{r chunk-014}
+
+dat_lm_ktrans <-
+  dat_sheet |>
+  dplyr::select(
+    Y   = tidyselect::all_of(var_resp_ktrans)
+  , age
+  , sex
+  , tidyselect::all_of(predictor_vars_ktrans)
+  ) |>
+  tidyr::drop_na() |>
+  tibble::as_tibble()
+
+cat("Ktrans model — complete observations:", nrow(dat_lm_ktrans), "\n")
+
+fit_ktrans_full <-
+  lm(
+    formula = as.formula(
+      paste0("Y ~ ", paste(predictor_vars_ktrans, collapse = " + "))
+    )
+  , data = dat_lm_ktrans
+  )
+
+fit_ktrans_red <-
+  stats::step(
+    object    = fit_ktrans_full
+  , direction = "backward"
+  , trace     = 0
+  , k         = 2    # AIC
+  )
+
+cat("\n=== Reduced Ktrans Model (BIC backward) ===\n")
+summary(fit_ktrans_red)
+
+```
+
+## Residual diagnostics
+
+```{r chunk-015, fig.height=4, fig.width=12}
+
+e_plot_lm_diagnostics(fit_albumin_red, sw_plot_set = c(NA, "simple", "simpleAV", "all")[2])
+e_plot_model_contrasts(
+   fit = fit_albumin_red,
+  dat_cont = dat_lm_albumin,
+)
+
+
+e_plot_lm_diagnostics(fit_ktrans_red, sw_plot_set = c(NA, "simple", "simpleAV", "all")[2])
+e_plot_model_contrasts(
+   fit = fit_ktrans_red,
+  dat_cont = dat_lm_ktrans,
+)
+```
+
+
+
+# Build Composite Inflammatory Score
+
+Biomarker-only weighted sum (age and sex terms removed so the score reflects
+**inflammation / BBB biology** rather than demographics).
+
+```{r chunk-017}
+coef_albumin_red <- coef(fit_albumin_red)
+
+terms_demo      <- c("(Intercept)", "age", "sexMale", "sexFemale")
+terms_biomarker <- names(coef_albumin_red)[ names(coef_albumin_red) %notin% terms_demo ]
+
+cat("Biomarker terms in composite:\n")
+print(coef_albumin_red[ terms_biomarker ])
+
+# Score on z-scaled predictors (consistent with model fitting) they were not same as the datsheet
+# dat_score_input <-
+#   dat_sub |>
+#   dplyr::mutate(
+#     across(tidyselect::all_of(terms_biomarker), ~ as.numeric(scale(.x)))
+#   )
+
+score_matrix  <- dat_sheet |> dplyr::select(tidyselect::all_of(terms_biomarker)) |> as.matrix()
+score_weights <- coef_albumin_red[ terms_biomarker ]
+
+#score = (MMP-2 × 0.33) + (IL-10 × 0.79) + (MMP-3 × 0.32) + (GFAP × 0.53) + ...
+dat_sheet$score_inflammation <- as.numeric(score_matrix %*% score_weights)
+labelled::var_label(dat_sheet$score_inflammation) <- "Composite Inflammatory Score (BBB disruption)"
+
+cat("\nScore computed for", sum(!is.na(dat_sheet$score_inflammation)),
+    "of", nrow(dat_sheet), "subjects\n")
+summary(dat_sheet$score_inflammation)
+```
+
+
+###  composite scores for ktrans 
+
+```{r}
+coef_ktrans_red <- coef(fit_ktrans_red)
+
+terms_demo      <- c("(Intercept)", "age", "sexMale", "sexFemale")
+terms_biomarker <- names(coef_ktrans_red)[ names(coef_ktrans_red) %notin% terms_demo ]
+
+cat("Biomarker terms in composite:\n")
+print(coef_albumin_red[ terms_biomarker ])
+
+# Score on z-scaled predictors (consistent with model fitting) they were not same as the datsheet
+# dat_score_input <-
+#   dat_sub |>
+#   dplyr::mutate(
+#     across(tidyselect::all_of(terms_biomarker), ~ as.numeric(scale(.x)))
+#   )
+
+score_matrix_ktrans  <- dat_sheet |> dplyr::select(tidyselect::all_of(terms_biomarker)) |> as.matrix()
+score_weights_ktrans <- coef_ktrans_red[ terms_biomarker ]
+
+#score = (MMP-2 × 0.33) + (IL-10 × 0.79) + (MMP-3 × 0.32) + (GFAP × 0.53) + ...
+dat_sheet$score_inflammation <- as.numeric(score_matrix_ktrans %*% score_weights_ktrans)
+labelled::var_label(dat_sheet$score_inflammation) <- "Composite Inflammatory Score (BBB disruption)"
+
+cat("\nScore computed for", sum(!is.na(dat_sheet$score_inflammation)),
+    "of", nrow(dat_sheet), "subjects\n")
+summary(dat_sheet$score_inflammation)
+```
+
+
+## Validation plots
+
+```{r chunk-018, fig.height=4, fig.width=13}
+
+p_vs_alb <-
+  e_plot_scatterplot(
+    dat_plot            = dat_sheet
+  , var_x               = "score_inflammation"
+  , var_y               = "fl_albumin_index_log2"
+  , text_title          = "Score vs. Albumin Index"
+  , smooth_all          = "lm"
+  , sw_smooth_all_se    = TRUE
+  , sw_corr_in_subtitle = TRUE
+  )
+
+p_vs_ktr <-
+  e_plot_scatterplot(
+    dat_plot            = dat_sheet
+  , var_x               = "score_inflammation"
+  , var_y               = "mri_perm_3t_tot_log2"
+  , text_title          = "Score vs. Ktrans"
+  , smooth_all          = "lm"
+  , sw_smooth_all_se    = TRUE
+  , sw_corr_in_subtitle = TRUE
+  )
+
+p_valid <-
+  p_vs_alb + p_vs_ktr +
+  patchwork::plot_annotation(title = "Composite Inflammatory Score — Validation")
+
+p_valid |> print()
+
+ggsave(
+    "All_figures_for_paper/composite/p_score_validation.png"
+  , plot = p_valid, width = 13, height = 4, dpi = 300, bg = "white"
+  )
+```
+
+
+# Save
+
+```{r chunk-020}
+save(
+    dat_sub
+  , Var
+  , fit_albumin_red
+  , fit_ktrans_red
+  , terms_biomarker
+  , corr_albumin
+  , corr_ktrans
+  , file = "dat_sub_with_composite_inflammation_score.RData"
+  )
+
+cat("Saved: dat_sub_with_composite_inflammation_score.RData\n")
+```
+
+# Plasma MMPs 2, 3 and 10 with albumin as response
+
+```{r}
+
+predictor_vars_albumin_mmp <- c("fl_plasma__ALL__mmp_2_log2", 
+                                "fl_plasma__ALL__mmp_10_log2", 
+                                "fl_plasma__ALL__mmp_3_log2" )
+
+dat_lm_albumin_mmps <-
+  dat_sheet |>
+  dplyr::select(
+    Y   = tidyselect::all_of(var_resp_albumin)
+  , age
+  , sex
+  , tidyselect::all_of(predictor_vars_albumin_mmp)
+  ) |>
+  tidyr::drop_na() |>
+  tibble::as_tibble()
+
+cat("Albumin model — complete observations:", nrow(dat_lm_albumin_mmps), "\n")
+
+fit_albumin_full_mmp <-
+  lm(
+    formula = as.formula(
+      paste0("Y ~  ", paste(predictor_vars_albumin_mmp, collapse = " + "))
+    )
+  , data = dat_lm_albumin_mmps
+  )
+
+fit_albumin_full_mmp_int <-
+  lm(
+    formula = as.formula(
+      paste0("Y ~ (", paste(predictor_vars_albumin_mmp, collapse = " + "), ")^2")
+    ),
+    data = dat_lm_albumin_mmps
+  )
+
+summary(fit_albumin_full_mmp_int)
+
+fit_albumin_red_mmps <-
+  stats::step(
+    object    = fit_albumin_full_mmp_int
+  , direction = "backward"
+  , trace     = 0
+  , k         =2   # AIC
+  )
+
+
+summary(fit_albumin_full_mmp)
+
+summary(fit_albumin_red_mmps)
+
+# Now individual
+
+
+
+```
+
+
+# Plasma MMPs 2, 3 and 10 with Ktrans as response
+```{r}
+predictor_vars_ktrans_mmp <- c("fl_plasma__ALL__mmp_2_log2", 
+                                "fl_plasma__ALL__mmp_10_log2", 
+                                "fl_plasma__ALL__mmp_3_log2" )
+dat_lm_ktrans_mmp <-
+  dat_sheet |>
+  dplyr::select(
+    Y   = tidyselect::all_of(var_resp_ktrans)
+  , age
+  , sex
+  , tidyselect::all_of(predictor_vars_ktrans_mmp)
+  ) |>
+  tidyr::drop_na() |>
+  tibble::as_tibble()
+
+cat("Ktrans model — complete observations:", nrow(dat_lm_ktrans_mmp), "\n")
+
+fit_ktrans_full_mmp <-
+  lm(
+    formula = as.formula(
+      paste0("Y ~ ", paste(predictor_vars_ktrans_mmp, collapse = " + "))
+    )
+  , data = dat_lm_ktrans_mmp
+  )
+
+
+fit_ktrans_full_mmp_int <-
+  lm(
+    formula = as.formula(
+      paste0("Y ~ (", paste(predictor_vars_ktrans_mmp, collapse = " + "), ")^2")
+    ),
+    data = dat_lm_ktrans_mmp
+  )
+
+fit_ktrans_red_mmp <-
+  stats::step(
+    object    = fit_ktrans_full_mmp_int
+  , direction = "backward"
+  , trace     = 0
+  , k         = 2    # AIC
+  )
+summary(fit_ktrans_full_mmp)
+
+
+summary(fit_ktrans_red_mmp)
+
+```
+
+# Plasma individual
+
+```{r}
+# Individual MMP models for Albumin Index (no age, no sex)
+
+predictor_mmp2  <- "fl_plasma__ALL__mmp_2_log2"
+predictor_mmp10 <- "fl_plasma__ALL__mmp_10_log2"
+predictor_mmp3  <- "fl_plasma__ALL__mmp_3_log2"
+
+
+# ----------------------------
+# MMP-2
+# ----------------------------
+dat_lm_albumin_mmp2 <-
+  dat_sheet |>
+  dplyr::select(
+    Y = tidyselect::all_of(var_resp_albumin),
+    tidyselect::all_of(predictor_mmp2)
+  ) |>
+  tidyr::drop_na() |>
+  tibble::as_tibble()
+
+cat("Albumin model with MMP-2 — complete observations:", nrow(dat_lm_albumin_mmp2), "\n")
+
+fit_albumin_mmp2 <-
+  lm(
+    formula = as.formula(
+      paste0("Y ~ ", predictor_mmp2)
+    ),
+    data = dat_lm_albumin_mmp2
+  )
+
+summary(fit_albumin_mmp2)
+
+
+
+# ----------------------------
+# MMP-10
+# ----------------------------
+dat_lm_albumin_mmp10 <-
+  dat_sheet |>
+  dplyr::select(
+    Y = tidyselect::all_of(var_resp_albumin),
+    tidyselect::all_of(predictor_mmp10)
+  ) |>
+  tidyr::drop_na() |>
+  tibble::as_tibble()
+
+cat("Albumin model with MMP-10 — complete observations:", nrow(dat_lm_albumin_mmp10), "\n")
+
+fit_albumin_mmp10 <-
+  lm(
+    formula = as.formula(
+      paste0("Y ~ ", predictor_mmp10)
+    ),
+    data = dat_lm_albumin_mmp10
+  )
+
+summary(fit_albumin_mmp10)
+
+
+
+# ----------------------------
+# MMP-3
+# ----------------------------
+dat_lm_albumin_mmp3 <-
+  dat_sheet |>
+  dplyr::select(
+    Y = tidyselect::all_of(var_resp_albumin),
+    tidyselect::all_of(predictor_mmp3)
+  ) |>
+  tidyr::drop_na() |>
+  tibble::as_tibble()
+
+cat("Albumin model with MMP-3 — complete observations:", nrow(dat_lm_albumin_mmp3), "\n")
+
+fit_albumin_mmp3 <-
+  lm(
+    formula = as.formula(
+      paste0("Y ~ ", predictor_mmp3)
+    ),
+    data = dat_lm_albumin_mmp3
+  )
+
+summary(fit_albumin_mmp3)
+```
+
+# Ktrans 
+
+```{r}
+# Individual MMP models for Ktrans (no age, no sex)
+
+predictor_mmp2  <- "fl_plasma__ALL__mmp_2_log2"
+predictor_mmp10 <- "fl_plasma__ALL__mmp_10_log2"
+predictor_mmp3  <- "fl_plasma__ALL__mmp_3_log2"
+
+
+# ----------------------------
+# MMP-2
+# ----------------------------
+dat_lm_ktrans_mmp2 <-
+  dat_sheet |>
+  dplyr::select(
+    Y = tidyselect::all_of(var_resp_ktrans),
+    tidyselect::all_of(predictor_mmp2)
+  ) |>
+  tidyr::drop_na() |>
+  tibble::as_tibble()
+
+cat("Ktrans model with MMP-2 — complete observations:", nrow(dat_lm_ktrans_mmp2), "\n")
+
+fit_ktrans_mmp2 <-
+  lm(
+    formula = as.formula(
+      paste0("Y ~ ", predictor_mmp2)
+    ),
+    data = dat_lm_ktrans_mmp2
+  )
+
+summary(fit_ktrans_mmp2)
+
+
+
+# ----------------------------
+# MMP-10
+# ----------------------------
+dat_lm_ktrans_mmp10 <-
+  dat_sheet |>
+  dplyr::select(
+    Y = tidyselect::all_of(var_resp_ktrans),
+    tidyselect::all_of(predictor_mmp10)
+  ) |>
+  tidyr::drop_na() |>
+  tibble::as_tibble()
+
+cat("Ktrans model with MMP-10 — complete observations:", nrow(dat_lm_ktrans_mmp10), "\n")
+
+fit_ktrans_mmp10 <-
+  lm(
+    formula = as.formula(
+      paste0("Y ~ ", predictor_mmp10)
+    ),
+    data = dat_lm_ktrans_mmp10
+  )
+
+summary(fit_ktrans_mmp10)
+
+
+
+# ----------------------------
+# MMP-3
+# ----------------------------
+dat_lm_ktrans_mmp3 <-
+  dat_sheet |>
+  dplyr::select(
+    Y = tidyselect::all_of(var_resp_ktrans),
+    tidyselect::all_of(predictor_mmp3)
+  ) |>
+  tidyr::drop_na() |>
+  tibble::as_tibble()
+
+cat("Ktrans model with MMP-3 — complete observations:", nrow(dat_lm_ktrans_mmp3), "\n")
+
+fit_ktrans_mmp3 <-
+  lm(
+    formula = as.formula(
+      paste0("Y ~ ", predictor_mmp3)
+    ),
+    data = dat_lm_ktrans_mmp3
+  )
+
+summary(fit_ktrans_mmp3)
+```
+
+
+
+# Table
+```{r}
+
+
+dat_sub |>
+  tidyr::separate_wider_delim(
+    cols        = ptid
+  , delim       = "-"
+  , names       = c("ptid_Prefix", "ptid_Number")
+  , cols_remove = FALSE
+  ) |>
+  dplyr::mutate(
+    Cohort = dplyr::case_when(
+      ptid_Prefix == "UP"  ~ "MarkVCID"
+    , ptid_Prefix == "VCI" ~ "VCI"
+    , ptid_Prefix == "VDP" ~ "VDP"
+    , TRUE                 ~ ptid_Prefix
+    )
+  ) |>
+  dplyr::group_by(Cohort, ptid_Prefix) |>
+  dplyr::summarise(
+    N                  = dplyr::n()
+  , `Albumin Index`    = sum(!is.na(fl_albumin_index_log2))
+  , `MRI Permeability` = sum(!is.na(mri_perm_3t_tot_log2))
+  , .groups = "drop"
+  ) |>
+  dplyr::rename(`Grant ID` = ptid_Prefix) |>
+  knitr::kable(caption = "Biomarker Availability by Cohort and Grant ID")
+
+
+dat_sub |>
+  tidyr::separate_wider_delim(
+    cols        = ptid
+  , delim       = "-"
+  , names       = c("ptid_Prefix", "ptid_Number")
+  , cols_remove = FALSE
+  ) |>
+  dplyr::mutate(
+    Cohort = dplyr::case_when(
+      ptid_Prefix == "UP"  ~ "MarkVCID"
+    , ptid_Prefix == "VCI" ~ "VCI"
+    , ptid_Prefix == "VDP" ~ "VDP"
+    , TRUE                 ~ ptid_Prefix
+    )
+  ) |>
+  dplyr::group_by(Cohort, ptid_Prefix) |>
+  dplyr::summarise(
+    N                  = dplyr::n()
+  , `Albumin Index`    = sum(!is.na(fl_albumin_index_log2))
+  , `MRI Permeability` = sum(!is.na(mri_perm_3t_tot_log2))
+  , .groups = "drop"
+  ) |>
+  dplyr::rename(`Grant ID` = ptid_Prefix) |>
+  gt() |>
+  tab_header(title = "Biomarker Availability by Cohort and Grant ID") |>
+  cols_align(align = "center", columns = c(N, `Albumin Index`, `MRI Permeability`)) |>
+  tab_style(
+    style     = cell_text(weight = "bold")
+  , locations = cells_column_labels()
+  )
+
+```
+

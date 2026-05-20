@@ -1,0 +1,762 @@
+---
+title:        "Composite Inflammatory Score: BBB Disruption Factor"
+subtitle:     "Based on Hilmer, et al., (2022). *Blood-brain barrier disruption measured by albumin index correlates with inflammatory fluid biomarkers*"
+author:       Azadeh Golduzian
+date:         last-modified # today, now, last-modified
+date-format:  long          # full, long, medium, short, iso,   https://quarto.org/docs/reference/dates.html
+format:
+  html:
+    theme:                  litera
+    highlight-style:        atom-one
+    page-layout:            full      # article, full   # https://quarto.org/docs/output-formats/page-layout.html
+    toc:                    true
+    toc-depth:              4
+    toc-location:           body      # left, body, right
+    number-sections:        true      # true, false
+    number-depth:           3
+    code-fold:              show      # true (initially hidden), false, show (initially shown)
+    code-tools:                       # menu top-right to show/hide all code
+      toggle:               true
+      caption:              "Code"    # none
+      source:               false
+    code-overflow:          scroll    # scroll, wrap
+    code-block-bg:          true
+    code-block-border-left: "#30B0E0"
+    df-print:               paged     # default, kable, tibble, paged   # https://quarto.org/docs/computations/r.html
+fig-width:                  6
+fig-height:                 4
+execute: # https://quarto.org/docs/computations/execution-options.html, https://quarto.org/docs/computations/r.html
+  cache:    false   # false, true
+  eval:     true    # true, false  Evaluate the code chunk (if false, just echos the code into the output)
+  echo:     true    # true, false  Include the source code in output
+---
+
+<!---
+# Erik's compile commands in R:
+  setwd("D:/Dropbox/StatAcumen/consult/Authorship/2014_GaryRosenberg_UNM_NIH_VascularDementia_MRI/2024_ADRC/Analyses/202501_ADRC_Permeability")
+  fn_qmd <- "Golduzian_Rosenberg_ADRC_Inflammation_Analysis_4-Composite_Inflammation_Score_20260326.qmd"
+  quarto::quarto_render(input = fn_qmd)
+-->
+
+```{r init, echo=FALSE}
+#options(width = 80)
+#options(warn  = -1)
+options(str   = strOptions(list.len = 1e3))
+options(knitr.kable.NA = '') # Display NAs as blanks
+my_seed <- 34567
+set.seed(my_seed)
+```
+
+--------------------------------------------------------------------------------
+
+# Next actions
+
+- Identify best-correlated biomarkers with albumin index (BBB disruption marker)
+- Build composite inflammatory score using backward BIC regression
+  - Model 1: `fl_albumin_index_log2 ~ CSF + Plasma + MRI` predictors
+  - Model 2: `mri_perm_3t_tot_log2 ~ CSF + Plasma + MRI` predictors (Ktrans)
+- Target: Beat R² = 0.53
+- Save composite score `score_inflammation` for downstream use
+
+--------------------------------------------------------------------------------
+
+# Data preliminaries
+
+```{r chunk-003}
+library(erikmisc)
+library(tidyverse)
+library(labelled)
+library(corrplot)
+library(broom)
+library(dunn.test)
+library(ggpubr)
+library(modelsummary)
+library(patchwork)
+
+dir.create("All_figures_for_paper",      showWarnings = FALSE)
+dir.create("All_figures_for_paper/composite", showWarnings = FALSE)
+```
+
+## Load saved data
+
+```{r chunk-004}
+load("dat_sub_Data_inflammation_analysis_paper_06052025.RData")
+load("dat_sub_and_Var_for_inflammation_analysis.RData")
+```
+
+## Variable list for this analysis
+
+Candidate predictors are all CSF, Plasma, and MRI biomarkers
+(excluding the two response variables themselves).
+
+```{r chunk-005}
+var_resp_albumin <- "fl_albumin_index_log2"
+var_resp_ktrans  <- "mri_perm_3t_tot_log2"
+
+# All candidate predictors: CSF + Plasma + MRI, excluding response vars
+var_list_all <-
+  c(Var$csf, Var$plasma, Var$mri)
+
+vars_exclude_from_predictors <-
+  c(
+    "ptid", "age", "sex", "demo_edu_yrs", "dx_current"
+  , var_resp_albumin
+  , var_resp_ktrans
+  , "mri_perm_3t_tot"   # raw (non-log2) version of Ktrans
+  )
+
+list_var_covar <-
+  var_list_all[
+    var_list_all %notin% vars_exclude_from_predictors
+  ]
+
+cat("Number of candidate predictors:", length(list_var_covar), "\n")
+print(list_var_covar)
+```
+
+## Z-score scale predictors (keep responses on log2 scale)
+
+```{r chunk-006}
+# data for demographics, before z-score scaling
+dat_sheet_demo <- dat_sub
+
+dat_sheet <-
+  dat_sub |>
+  dplyr::mutate(
+    across(tidyselect::all_of(c(Var$csf, Var$plasma, Var$mri)), scale)
+  , across(tidyselect::all_of(c(Var$csf, Var$plasma, Var$mri)), as.numeric)
+  )
+
+# restore variable labels
+for (n_label in as.character(unlist(Var))) {
+  labelled::var_label(dat_sheet     [[ n_label ]]) <-
+    labelled::var_label(dat_sheet_demo[[ n_label ]])
+}
+```
+
+--------------------------------------------------------------------------------
+
+# Step 1: Visualize Missingness
+
+Using `e_plot_missing` (from erikmisc) sorted by albumin index to identify which
+biomarkers have the most complete data in subjects with BBB measures.
+
+```{r chunk-007, fig.height=10, fig.width=12}
+p_missing <-
+  e_plot_missing(
+    dat_plot       = dat_sub
+  , var_group      = "dx_current"
+  , sw_group_sort  = TRUE
+  , var2_sort      = "fl_albumin_index_log2"
+  )
+p_missing |> print()
+
+ggsave(
+    "All_figures_for_paper/composite/plot_missing_for_composite.png"
+  , plot   = p_missing
+  , width  = 14
+  , height = 10
+  , dpi    = 300
+  , bg     = "white"
+  )
+```
+
+--------------------------------------------------------------------------------
+
+# Step 2: Best Subset — Observations vs. Variables Trade-off
+
+`e_plot_complete_by_variable_subset` shows how sample size changes as we add
+more biomarkers.  We search over **all CSF + Plasma + MRI** candidates
+(the full variable universe Erik approved) and pick the row that gives the
+best balance between number of predictors and complete observations.
+
+## For Albumin Index (BBB)
+
+```{r chunk-008, fig.height=6, fig.width=10}
+vars_for_subset_albumin <-
+  c(var_resp_albumin, list_var_covar) |> unique()
+
+result_subset_albumin <-
+  e_plot_complete_by_variable_subset(
+    dat      = dat_sheet
+  , var_list = vars_for_subset_albumin
+  , var_resp = var_resp_albumin
+  , sw_plot_complete = 20   # show top 20 subsets
+  )
+
+# Inspect the table to choose the best row
+result_subset_albumin$tab |> print(n = 30)
+```
+
+Choose the subset row that maximises predictors while keeping n ≥ 60.
+Adjust `i_best_albumin` after inspecting the table above.
+
+```{r chunk-009}
+# ---- USER: adjust index after inspecting table above ----
+i_best_albumin <- 5   # row index in result_subset_albumin$tab
+
+best_vars_albumin <- result_subset_albumin$var_names[[ i_best_albumin ]]
+n_best_albumin    <- result_subset_albumin$tab$n_complete[ i_best_albumin ]
+
+cat("Selected subset for Albumin model:\n")
+cat("  n complete:", n_best_albumin, "\n")
+cat("  Variables :", paste(best_vars_albumin, collapse = ", "), "\n")
+```
+
+## For Ktrans / MRI Permeability
+
+```{r chunk-010, fig.height=6, fig.width=10}
+vars_for_subset_ktrans <-
+  c(var_resp_ktrans, list_var_covar) |> unique()
+
+result_subset_ktrans <-
+  e_plot_complete_by_variable_subset(
+    dat      = dat_sheet
+  , var_list = vars_for_subset_ktrans
+  , var_resp = var_resp_ktrans
+  , sw_plot_complete = 20
+  )
+
+result_subset_ktrans$tab |> print(n = 30)
+```
+
+```{r chunk-011}
+# ---- USER: adjust index after inspecting table above ----
+i_best_ktrans <- 5   # row index in result_subset_ktrans$tab
+
+best_vars_ktrans <- result_subset_ktrans$var_names[[ i_best_ktrans ]]
+n_best_ktrans    <- result_subset_ktrans$tab$n_complete[ i_best_ktrans ]
+
+cat("Selected subset for Ktrans model:\n")
+cat("  n complete:", n_best_ktrans, "\n")
+cat("  Variables :", paste(best_vars_ktrans, collapse = ", "), "\n")
+```
+
+--------------------------------------------------------------------------------
+
+# Step 3: Backward BIC Regression — Albumin Index
+
+## Define helper: BIC backward selection
+
+```{r chunk-012}
+# Reusable backward BIC selector (same pattern as Analysis_1)
+f_model_sel <-
+  function(
+    dat_this      = dat_lm
+  , lm_criterion  = c("AIC", "BIC")[2]
+  ) {
+
+  if (lm_criterion == "AIC") { AIC_k = 2                     }
+  if (lm_criterion == "BIC") { AIC_k = log(nrow( dat_this )) }
+
+  # Full model with all candidate predictors
+  formula_full <-
+    as.formula(
+      paste0(
+        "Y ~ age + sex + "
+      , paste(setdiff(names(dat_this), c("Y", "age", "sex")), collapse = " + ")
+      )
+    )
+
+  fit_full <- lm(formula = formula_full, data = dat_this)
+
+  # Step-wise backward with BIC / AIC penalty
+  fit_red <-
+    stats::step(
+      object    = fit_full
+    , direction = "backward"
+    , trace     = 0
+    , k         = AIC_k
+    )
+
+  return(fit_red)
+} # f_model_sel
+
+lm_criterion <- c("AIC", "BIC")[2]
+```
+
+## Fit full → reduced model (Albumin Index)
+
+```{r chunk-013}
+# Build complete-case dataset for the chosen subset
+predictor_vars_albumin <-
+  setdiff(best_vars_albumin, var_resp_albumin)
+
+dat_lm_albumin <-
+  dat_sheet |>
+  dplyr::select(
+    Y   = tidyselect::all_of(var_resp_albumin)
+  , age
+  , sex
+  , tidyselect::all_of(predictor_vars_albumin)
+  ) |>
+  tidyr::drop_na() |>
+  tibble::as_tibble()
+
+cat("Albumin model — complete observations:", nrow(dat_lm_albumin), "\n")
+
+# Backward BIC selection
+fit_albumin_full <-
+  lm(
+    formula =
+      as.formula(
+        paste0(
+          "Y ~ age + sex + "
+        , paste(predictor_vars_albumin, collapse = " + ")
+        )
+      )
+  , data = dat_lm_albumin
+  )
+
+fit_albumin_red <-
+  stats::step(
+    object    = fit_albumin_full
+  , direction = "backward"
+  , trace     = 0
+  , k         = log(nrow(dat_lm_albumin))  # BIC
+  )
+
+cat("\n=== Reduced Albumin Model (BIC) ===\n")
+summary(fit_albumin_red)
+
+cat("\nR² =", summary(fit_albumin_red)$r.squared |> round(3), "\n")
+cat("Adj R² =", summary(fit_albumin_red)$adj.r.squared |> round(3), "\n")
+```
+
+## Residual diagnostics (Albumin model)
+
+```{r chunk-014, fig.height=4, fig.width=10}
+par(mfrow = c(1, 3))
+plot(fit_albumin_red, which = c(1, 2, 3))
+par(mfrow = c(1, 1))
+```
+
+## Coefficient plot (Albumin model)
+
+```{r chunk-015, fig.height=5, fig.width=7}
+p_coef_albumin <-
+  fit_albumin_red |>
+  broom::tidy(conf.int = TRUE) |>
+  dplyr::filter(term != "(Intercept)") |>
+  dplyr::mutate(
+    term = term |>
+      stringr::str_replace_all(stringr::fixed("sexMale"), "Sex (Male)") |>
+      stringr::str_replace_all("^age$", "Age")
+  , sig = dplyr::if_else(p.value < 0.05, "p < 0.05", "n.s.")
+  ) |>
+  ggplot2::ggplot(
+    ggplot2::aes(
+      x = estimate, y = reorder(term, estimate)
+    , colour = sig
+    )
+  ) +
+  ggplot2::theme_bw() +
+  ggplot2::geom_vline(xintercept = 0, linetype = "dashed", colour = "gray60") +
+  ggplot2::geom_point(size = 3) +
+  ggplot2::geom_errorbarh(
+    ggplot2::aes(xmin = conf.low, xmax = conf.high)
+  , height = 0.3
+  ) +
+  ggplot2::scale_colour_manual(
+    values = c("p < 0.05" = "#E31A1C", "n.s." = "gray50")
+  ) +
+  ggplot2::labs(
+    title    = "Reduced Model — Albumin Index (BBB)"
+  , subtitle = paste0("BIC backward selection  |  R² = ",
+                      round(summary(fit_albumin_red)$r.squared, 3),
+                      "  |  n = ", nrow(dat_lm_albumin))
+  , x        = "Standardized Coefficient (95% CI)"
+  , y        = NULL
+  , colour   = NULL
+  ) +
+  ggplot2::theme(legend.position = "bottom")
+
+p_coef_albumin |> print()
+
+ggsave(
+    "All_figures_for_paper/composite/p_coef_albumin_composite.png"
+  , plot   = p_coef_albumin
+  , width  = 7
+  , height = 5
+  , dpi    = 300
+  , bg     = "white"
+  )
+```
+
+--------------------------------------------------------------------------------
+
+# Step 4: Backward BIC Regression — Ktrans (MRI Permeability)
+
+```{r chunk-016}
+predictor_vars_ktrans <-
+  setdiff(best_vars_ktrans, var_resp_ktrans)
+
+dat_lm_ktrans <-
+  dat_sheet |>
+  dplyr::select(
+    Y   = tidyselect::all_of(var_resp_ktrans)
+  , age
+  , sex
+  , tidyselect::all_of(predictor_vars_ktrans)
+  ) |>
+  tidyr::drop_na() |>
+  tibble::as_tibble()
+
+cat("Ktrans model — complete observations:", nrow(dat_lm_ktrans), "\n")
+
+fit_ktrans_full <-
+  lm(
+    formula =
+      as.formula(
+        paste0(
+          "Y ~ age + sex + "
+        , paste(predictor_vars_ktrans, collapse = " + ")
+        )
+      )
+  , data = dat_lm_ktrans
+  )
+
+fit_ktrans_red <-
+  stats::step(
+    object    = fit_ktrans_full
+  , direction = "backward"
+  , trace     = 0
+  , k         = log(nrow(dat_lm_ktrans))  # BIC
+  )
+
+cat("\n=== Reduced Ktrans Model (BIC) ===\n")
+summary(fit_ktrans_red)
+
+cat("\nR² =", summary(fit_ktrans_red)$r.squared |> round(3), "\n")
+cat("Adj R² =", summary(fit_ktrans_red)$adj.r.squared |> round(3), "\n")
+```
+
+## Residual diagnostics (Ktrans model)
+
+```{r chunk-017, fig.height=4, fig.width=10}
+par(mfrow = c(1, 3))
+plot(fit_ktrans_red, which = c(1, 2, 3))
+par(mfrow = c(1, 1))
+```
+
+## Coefficient plot (Ktrans model)
+
+```{r chunk-018, fig.height=5, fig.width=7}
+p_coef_ktrans <-
+  fit_ktrans_red |>
+  broom::tidy(conf.int = TRUE) |>
+  dplyr::filter(term != "(Intercept)") |>
+  dplyr::mutate(
+    term = term |>
+      stringr::str_replace_all(stringr::fixed("sexMale"), "Sex (Male)") |>
+      stringr::str_replace_all("^age$", "Age")
+  , sig = dplyr::if_else(p.value < 0.05, "p < 0.05", "n.s.")
+  ) |>
+  ggplot2::ggplot(
+    ggplot2::aes(
+      x = estimate, y = reorder(term, estimate)
+    , colour = sig
+    )
+  ) +
+  ggplot2::theme_bw() +
+  ggplot2::geom_vline(xintercept = 0, linetype = "dashed", colour = "gray60") +
+  ggplot2::geom_point(size = 3) +
+  ggplot2::geom_errorbarh(
+    ggplot2::aes(xmin = conf.low, xmax = conf.high)
+  , height = 0.3
+  ) +
+  ggplot2::scale_colour_manual(
+    values = c("p < 0.05" = "#E31A1C", "n.s." = "gray50")
+  ) +
+  ggplot2::labs(
+    title    = "Reduced Model — Ktrans (MRI WM Permeability)"
+  , subtitle = paste0("BIC backward selection  |  R² = ",
+                      round(summary(fit_ktrans_red)$r.squared, 3),
+                      "  |  n = ", nrow(dat_lm_ktrans))
+  , x        = "Standardized Coefficient (95% CI)"
+  , y        = NULL
+  , colour   = NULL
+  ) +
+  ggplot2::theme(legend.position = "bottom")
+
+p_coef_ktrans |> print()
+
+ggsave(
+    "All_figures_for_paper/composite/p_coef_ktrans_composite.png"
+  , plot   = p_coef_ktrans
+  , width  = 7
+  , height = 5
+  , dpi    = 300
+  , bg     = "white"
+  )
+```
+
+--------------------------------------------------------------------------------
+
+# Step 5: Build Composite Inflammatory Score
+
+The composite score is the **fitted value** from the reduced Albumin model,
+restricted to the biomarker terms only (i.e., removing the intercept,
+age, and sex contributions so the score reflects **inflammation** alone,
+not demographics).
+
+This mirrors how the VD and AD composite scores are computed: a
+weighted linear combination of the most informative biomarkers,
+with weights = regression coefficients.
+
+```{r chunk-019}
+# Extract biomarker-only terms from the reduced model
+coef_albumin_red <- coef(fit_albumin_red)
+
+# Identify terms that are NOT intercept, age, sex
+terms_demo <- c("(Intercept)", "age", "sexMale", "sexFemale")
+terms_biomarker <-
+  names(coef_albumin_red)[
+    names(coef_albumin_red) %notin% terms_demo
+  ]
+
+cat("Biomarker terms retained in Albumin composite:\n")
+print(terms_biomarker)
+cat("\nCorresponding coefficients:\n")
+print(coef_albumin_red[ terms_biomarker ])
+```
+
+## Compute score for all subjects (with NA propagation)
+
+```{r chunk-020}
+# score = sum( beta_j * X_j ) for each retained biomarker j
+# Uses z-scored dat_sheet (consistent with model fitting)
+
+dat_sub <-
+  dat_sub |>
+  dplyr::mutate(
+    score_inflammation = NA_real_
+  )
+
+# Build a z-scored version of dat_sub for scoring
+dat_score_input <-
+  dat_sub |>
+  dplyr::mutate(
+    across(
+      tidyselect::all_of(terms_biomarker)
+    , ~ as.numeric(scale(.x))
+    )
+  )
+
+# Compute weighted sum for each row (NA if any biomarker is missing)
+score_matrix <-
+  dat_score_input |>
+  dplyr::select(tidyselect::all_of(terms_biomarker)) |>
+  as.matrix()
+
+score_weights <- coef_albumin_red[ terms_biomarker ]
+
+dat_sub$score_inflammation <-
+  as.numeric(score_matrix %*% score_weights)
+
+cat("Score computed for", sum(!is.na(dat_sub$score_inflammation)),
+    "of", nrow(dat_sub), "subjects\n")
+
+# Label the new variable
+labelled::var_label(dat_sub$score_inflammation) <-
+  "Composite Inflammatory Score (BBB disruption)"
+
+summary(dat_sub$score_inflammation)
+```
+
+## Distribution of the composite score
+
+```{r chunk-021, fig.height=4, fig.width=8}
+p_score_dist <-
+  dat_sub |>
+  dplyr::filter(!is.na(score_inflammation)) |>
+  ggplot2::ggplot(
+    ggplot2::aes(x = score_inflammation, fill = dx_current, colour = dx_current)
+  ) +
+  ggplot2::theme_bw() +
+  ggplot2::geom_density(alpha = 0.25) +
+  ggplot2::geom_rug(alpha = 0.4) +
+  ggplot2::labs(
+    title    = "Composite Inflammatory Score by Diagnosis"
+  , x        = "Composite Inflammatory Score"
+  , y        = "Density"
+  , fill     = "Diagnosis"
+  , colour   = "Diagnosis"
+  ) +
+  ggplot2::theme(legend.position = "bottom")
+
+p_score_dist |> print()
+
+ggsave(
+    "All_figures_for_paper/composite/p_score_distribution.png"
+  , plot   = p_score_dist
+  , width  = 8
+  , height = 4
+  , dpi    = 300
+  , bg     = "white"
+  )
+```
+
+## Composite score vs. Albumin Index (validation)
+
+```{r chunk-022, fig.height=4, fig.width=6}
+p_score_vs_albumin <-
+  e_plot_scatterplot(
+    dat_plot            = dat_sub
+  , var_x               = "score_inflammation"
+  , var_y               = "fl_albumin_index_log2"
+  , text_title          = "Composite Inflammatory Score vs. Albumin Index"
+  , smooth_all          = c("none", "loess", "lm", "glm", "gam")[3]
+  , sw_smooth_all_se    = TRUE
+  , sw_corr_in_subtitle = TRUE
+  )
+
+p_score_vs_albumin |> print()
+
+ggsave(
+    "All_figures_for_paper/composite/p_score_vs_albumin.png"
+  , plot   = p_score_vs_albumin
+  , width  = 6
+  , height = 4
+  , dpi    = 300
+  , bg     = "white"
+  )
+```
+
+## Composite score vs. Ktrans (cross-validation)
+
+```{r chunk-023, fig.height=4, fig.width=6}
+p_score_vs_ktrans <-
+  e_plot_scatterplot(
+    dat_plot            = dat_sub
+  , var_x               = "score_inflammation"
+  , var_y               = "mri_perm_3t_tot_log2"
+  , text_title          = "Composite Inflammatory Score vs. Ktrans"
+  , smooth_all          = c("none", "loess", "lm", "glm", "gam")[3]
+  , sw_smooth_all_se    = TRUE
+  , sw_corr_in_subtitle = TRUE
+  )
+
+p_score_vs_ktrans |> print()
+
+ggsave(
+    "All_figures_for_paper/composite/p_score_vs_ktrans.png"
+  , plot   = p_score_vs_ktrans
+  , width  = 6
+  , height = 4
+  , dpi    = 300
+  , bg     = "white"
+  )
+```
+
+--------------------------------------------------------------------------------
+
+# Step 6: Combined Figure — Reduced Model Summary
+
+Side-by-side coefficient plots for both response variables.
+
+```{r chunk-024, fig.height=6, fig.width=14}
+p_combined_coef <-
+  p_coef_albumin + p_coef_ktrans +
+  patchwork::plot_annotation(
+    title      = "Backward BIC Regression — Composite Inflammatory Biomarkers"
+  , subtitle   = "Left: BBB Albumin Index  |  Right: Ktrans MRI Permeability"
+  , tag_levels = "A"
+  , theme      = ggplot2::theme(plot.caption = ggplot2::element_text(hjust = 0))
+  )
+
+p_combined_coef |> print()
+
+ggsave(
+    "All_figures_for_paper/composite/p_combined_coef_both_responses.png"
+  , plot   = p_combined_coef
+  , width  = 14
+  , height = 6
+  , dpi    = 300
+  , bg     = "white"
+  )
+
+ggsave(
+    "All_figures_for_paper/composite/p_combined_coef_both_responses.pdf"
+  , plot   = p_combined_coef
+  , width  = 14
+  , height = 6
+  , units  = "in"
+  , useDingbats = FALSE
+  )
+```
+
+--------------------------------------------------------------------------------
+
+# Step 7: Model Performance Summary
+
+```{r chunk-025}
+tibble::tribble(
+  ~Response                      , ~Model            , ~`R²`                                          , ~`Adj R²`                                         , ~n
+, "Albumin Index (fl_albumin_index_log2)"
+  , "Full (all candidate predictors)"
+  , round(summary(fit_albumin_full)$r.squared,    3)
+  , round(summary(fit_albumin_full)$adj.r.squared, 3)
+  , nrow(dat_lm_albumin)
+, "Albumin Index (fl_albumin_index_log2)"
+  , "Reduced (BIC backward)"
+  , round(summary(fit_albumin_red)$r.squared,     3)
+  , round(summary(fit_albumin_red)$adj.r.squared,  3)
+  , nrow(dat_lm_albumin)
+, "Ktrans (mri_perm_3t_tot_log2)"
+  , "Full (all candidate predictors)"
+  , round(summary(fit_ktrans_full)$r.squared,     3)
+  , round(summary(fit_ktrans_full)$adj.r.squared,  3)
+  , nrow(dat_lm_ktrans)
+, "Ktrans (mri_perm_3t_tot_log2)"
+  , "Reduced (BIC backward)"
+  , round(summary(fit_ktrans_red)$r.squared,      3)
+  , round(summary(fit_ktrans_red)$adj.r.squared,   3)
+  , nrow(dat_lm_ktrans)
+) |>
+  knitr::kable(caption = "Model R² Summary — Composite Inflammatory Score Analysis")
+```
+
+```{r chunk-026}
+cat("=== Biomarkers retained in Albumin reduced model ===\n")
+broom::tidy(fit_albumin_red, conf.int = TRUE) |>
+  dplyr::mutate(
+    across(where(is.numeric), ~ round(.x, 3))
+  ) |>
+  dplyr::filter(term != "(Intercept)") |>
+  print(n = Inf)
+
+cat("\n=== Biomarkers retained in Ktrans reduced model ===\n")
+broom::tidy(fit_ktrans_red, conf.int = TRUE) |>
+  dplyr::mutate(
+    across(where(is.numeric), ~ round(.x, 3))
+  ) |>
+  dplyr::filter(term != "(Intercept)") |>
+  print(n = Inf)
+```
+
+--------------------------------------------------------------------------------
+
+# Step 8: Save updated dataset with composite score
+
+```{r chunk-027}
+save(
+    dat_sub
+  , Var
+  , fit_albumin_red
+  , fit_ktrans_red
+  , terms_biomarker
+  , file = "dat_sub_with_composite_inflammation_score.RData"
+  )
+
+cat("Saved: dat_sub_with_composite_inflammation_score.RData\n")
+cat("New variable added to dat_sub: score_inflammation\n")
+```
+
+--------------------------------------------------------------------------------
+
+# Session Info
+
+```{r chunk-028}
+sessionInfo()
+```

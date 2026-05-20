@@ -1,0 +1,5026 @@
+---
+title: "Multivariate,Triple_dichotomy_refinedaxes_Only_Albuminaxes"
+author: "Azadeh"
+format: html
+editor: visual
+---
+
+#Package
+
+```{r}
+
+# remotes::install_github("erikerhardt/erikmisc")
+
+library(ggplot2)
+library(dplyr)
+library(tidyr)
+library(car)
+library(broom)
+library(emmeans)
+library(pROC)
+library(rlang)
+library(patchwork)
+library(erikmisc)
+```
+
+#load data
+
+```{r}
+ # If needed load dat_all_combine
+# load("../../../Data/ADRC_VCI_MarkVCID2_ALL_combine.RData")
+
+load("dat_sub_Data_inflammation_analysis_paper_06052025.RData")
+load("dat_sub_and_Var_for_inflammation_analysis.RData")
+
+
+# 1. outcome variable
+y <- c("fl_albumin_index_log2", "mri_perm_3t_tot")
+
+# 2. predictors to scale (everything in CSF / plasma **except** the outcome)
+vars_to_scale <- setdiff(c(Var$csf, Var$plasma, Var$mri), y)
+
+dat_sheet <- dat_sub %>% 
+  mutate(
+    across(all_of(vars_to_scale),
+           ~ as.numeric(scale(.x)))
+  )        # y stays on its original log2 scale
+
+# 176 subjects , filter on baseline
+```
+
+##Do any fluid biomarkers correlate with the VD axis?Do any fluid biomarkers correlate with the AD axis?
+
+Note: We will associate plasma biomarkers or their ratios with CSF as the "ground truth" using the model: CSF AD \~ Plasma x1 + Plasma x2 + Plasma x3
+
+Additionally, we filter data based on the Baseline visit in the RedCap event name. Good news---there is still a substantial amount of data available.
+
+```{r}
+library(dplyr)
+
+# Define the baseline visit categories
+baseline_visits <- c(
+  "Baseline (Arm 1: Patients)",
+  "Baseline (Arm 2: Control)",
+  "Baseline (Arm 3: CSF controls)",
+  "Baseline (Arm 4: Diabetes)",
+  "baseline"
+)
+
+# Filter dataset based on baseline visits
+dat_all_combine_AD_VD <- dat_all_combine |>
+  filter(redcap_event_name %in% baseline_visits) |>  # Keep only baseline visits
+  mutate(
+    TripleDichotomy_VD = mri_dti_psmd_z,
+    TripleDichotomy_VD_log2 = e_log_shift(TripleDichotomy_VD),
+    TripleDichotomy_AD = (fl_csf__ALL__ptau / fl_csf__ALL__abeta_42),
+    TripleDichotomy_AD_log2 = log2(TripleDichotomy_AD),
+    fl_plasma__ALL__abeta42_40_ratio_log2 = log2(fl_plasma__ALL__abeta_42/fl_plasma__ALL__abeta_40)
+  )
+# nrow(dat_all_combine_AD_VD)
+# Check unique values after filtering on Baseline 
+# unique(dat_all_combine_AD_VD$redcap_event_name)
+ # hist(dat_all_combine_AD_VD$TripleDichotomy_VD_log2)
+### YES YES YES Now 630 rows!!!! YAY!!!!!!!
+ # hist(dat_all_combine_AD_VD$TripleDichotomy_AD, 100)
+
+
+
+```
+
+# Find all plasma biomarker combinations with albumin
+
+ Note: we check the  Multivariate
+1. CSF: Remove IGG.  "IGG is confusing, the other biomarkers are more interesting."
+2. CSF-only, add MMP-3 (even if n < 35)
+
+Still the R-square was low 
+
+
+Running albumin \~ plasma_only
+
+```{r}
+
+library(randomForest)
+library(caret)
+
+# Get only plasma biomarkers ending in _log2
+find_optimal_log2_groups <- function(data, min_cases = 30) {
+  # Get only plasma markers ending in _log2
+  plasma_markers <- grep("^fl_plasma.*_log2$", names(data), value = TRUE)
+  
+  # Start with outcome variable
+  current_vars <- c("fl_albumin_index_log2")
+  results <- list()
+  
+  for(marker in plasma_markers) {
+    temp_vars <- c(current_vars, marker)
+    complete_cases <- sum(complete.cases(data[, temp_vars]))
+    
+    if(complete_cases >= min_cases) {
+      current_vars <- temp_vars
+      results[[length(results) + 1]] <- list(
+        variables = current_vars,
+        complete_cases = complete_cases
+      )
+    }
+  }
+  return(results)
+}
+
+# Apply the function
+log2_groups <- find_optimal_log2_groups(dat_sub)
+
+# Print summary of available biomarkers and sample sizes
+for(i in seq_along(log2_groups)) {
+  cat("\nGroup", i, ":\n")
+  cat("Variables:", paste(log2_groups[[i]]$variables[-1], collapse = ", "), "\n")
+  cat("Complete cases:", log2_groups[[i]]$complete_cases, "\n")
+}
+
+# Get the final set of all log2 biomarkers
+final_log2_vars <- log2_groups[[length(log2_groups)]]$variables
+
+# Print final number of biomarkers and sample size
+cat("\nFinal model will include:", length(final_log2_vars)-1, "biomarkers\n")
+cat("With sample size:", log2_groups[[length(log2_groups)]]$complete_cases, "\n")
+
+# Function to print breakpoint summary
+summarize_breakpoints <- function(groups) {
+  prev_vars <- NULL
+  prev_n <- NULL
+  
+  cat("Sample Size Breakpoints:\n")
+  
+  for(i in seq_along(groups)) {
+    current_vars <- groups[[i]]$variables[-1]  # exclude outcome variable
+    current_n <- groups[[i]]$complete_cases
+    
+    if(is.null(prev_n) || current_n != prev_n) {
+      new_vars <- if(is.null(prev_vars)) {
+        current_vars
+      } else {
+        setdiff(current_vars, prev_vars)
+      }
+      
+      # Clean up variable names for display
+      clean_vars <- gsub("fl_plasma__ALL__", "", new_vars)
+      clean_vars <- gsub("_log2", "", clean_vars)
+      
+      cat(sprintf("%d cases: %s\n", 
+                  current_n,
+                  if(i == 1) {
+                    sprintf("starting with %s", paste(clean_vars, collapse = " and "))
+                  } else {
+                    sprintf("adding %s", paste(clean_vars, collapse = " and "))
+                  }))
+      
+      prev_vars <- current_vars
+      prev_n <- current_n
+    }
+  }
+}
+
+# Apply the function to your groups
+summarize_breakpoints(log2_groups)
+
+# Also show the complete list of final variables
+cat("\nFinal set of biomarkers:\n")
+final_vars <- gsub("fl_plasma__ALL__", "", 
+                  gsub("_log2", "", 
+                       log2_groups[[length(log2_groups)]]$variables[-1]))
+cat(paste(final_vars, collapse = "\n"))
+
+
+
+# Apply RandomForest to check the important varibels for Albumin index with 13 Var and 42 Obervation
+
+ biomarkers<- c(
+ # "fl_csf_glucose_log2",
+ # "fl_csf_total_protein_log2",
+ # "fl_csf_rbc_log2",
+ # "fl_csf_tnc_log2",
+ # "fl_csf_igg_log2",
+ # "fl_csf_albumin_log2",           
+ # "fl_csf_igg_synthesis_log2",     
+ # "fl_abeta_38_log2",
+ # "fl_csf__ALL__gfap_log2",
+ # "fl_plasma__ALL__gfap_log2",    
+ # "fl_csf__ALL__nfl_log2",         
+ # "fl_plasma__ALL__nfl_log2",
+ # "fl_csf__ALL__ptau_log2",        
+ # "fl_plasma__ALL__ptau_181_log2",
+ # "fl_plasma__ALL__abeta42_40_ratio_log2",
+ # "fl_plasma__ALL__ptau_217_log2",
+ # "fl_csf__ALL__abeta_40_log2",   
+ # "fl_plasma__ALL__abeta_40_log2",
+ # # "fl_csf__ALL__abeta_42_log2" ,   
+ # "fl_plasma__ALL__abeta_42_log2",
+ # "fl_csf__ALL__plgf_log2",
+ "fl_plasma__ALL__plgf_log2" ,
+ # "fl_csf__ALL__il_1b_log2" ,     
+ "fl_plasma__ALL__il_1b_log2",
+ "fl_plasma__ALL__mmp_2_log2" ,
+ "fl_plasma__ALL__mmp_1_log2",
+"fl_plasma__ALL__mmp_3_log2" ,
+ "fl_plasma__ALL__mmp_9_log2" ,
+ "fl_plasma__ALL__mmp_10_log2",
+ # "fl_csf__ALL__mmp_10_log2" ,
+ "fl_plasma__ALL__bfgf_log2",
+"fl_plasma__ALL__flt_1_log2",
+ "fl_plasma__ALL__tie2_log2" ,
+ "fl_plasma__ALL__vegf_a_log2",
+ "fl_plasma__ALL__vegf_c_log2",
+ "fl_plasma__ALL__vegf_d_log2"
+
+)
+
+
+n_complete <- sum(complete.cases(dat_sheet[, c("fl_albumin_index_log2", biomarkers)]))
+print(n_complete) # Only one remained
+
+
+
+
+# Function to run Random Forest analysis
+run_rf_analysis <- function(data, outcome_var, predictors, n_trees = 500) {
+  # Prepare data
+  model_data <- na.omit(data[, c(outcome_var, predictors)])
+  
+  # Create formula
+  rf_formula <- as.formula(paste(outcome_var, "~", paste(predictors, collapse = " + ")))
+  
+  # Run Random Forest
+  set.seed(123)  # for reproducibility
+  rf_model <- randomForest(
+    formula = rf_formula,
+    data = model_data,
+    ntree = n_trees,
+    importance = TRUE
+  )
+
+    # Get variable importance
+  var_imp <- importance(rf_model)
+  var_imp_df <- data.frame(
+    variable = gsub("fl_plasma__ALL__", "", gsub("_log2", "", rownames(var_imp))),
+    importance = var_imp[, "%IncMSE"],  # Using %IncMSE as importance measure
+    stringsAsFactors = FALSE
+  )
+  var_imp_df <- var_imp_df[order(-var_imp_df$importance), ]
+  
+  # Calculate model performance
+  predictions <- predict(rf_model) #If no new data is provided, it predicts for the training data.
+  rmse <- sqrt(mean((model_data[[outcome_var]] - predictions)^2))
+  r2 <- 1 - sum((model_data[[outcome_var]] - predictions)^2) / 
+            sum((model_data[[outcome_var]] - mean(model_data[[outcome_var]]))^2)
+  
+  return(list(
+    model = rf_model,
+    importance = var_imp_df,
+    performance = list(
+      rmse = rmse,
+      r2 = r2,
+      n_obs = nrow(model_data)
+    )
+  ))
+}
+
+# Run Random Forest analysis
+rf_results <- run_rf_analysis(
+  data = dat_sub,
+  outcome_var = "fl_albumin_index_log2",
+  predictors = biomarkers
+)
+
+# Print results
+cat("\nRandom Forest Model Performance:\n")
+cat("R-squared:", round(rf_results$performance$r2, 3), "\n")
+cat("RMSE:", round(rf_results$performance$rmse, 3), "\n")
+cat("Number of observations:", rf_results$performance$n_obs, "\n")
+
+# Print variable importance
+cat("\nVariable Importance (top 10):\n")
+print(head(rf_results$importance, 10))
+
+# Plot variable importance
+ggplot(rf_results$importance, aes(x = reorder(variable, importance), y = importance)) +
+  geom_bar(stat = "identity", fill = "steelblue") +
+  coord_flip() +
+  theme_minimal() +
+  labs(
+    title = "Variable Importance in Random Forest Model",
+    x = "Variables",
+    y = "Importance (%IncMSE)"
+  )
+
+# Function to create models with top N variables
+create_top_n_model <- function(data, outcome_var, importance_df, n_vars) {
+  top_vars <- paste0("fl_plasma__ALL__", 
+                    importance_df$variable[1:n_vars], 
+                    "_log2")
+  
+  # Create formula with interactions
+  formula <- as.formula(paste(outcome_var, "~", 
+                            paste(top_vars, collapse = " + ")))
+  
+  # Fit model
+  model_data <- na.omit(data[, c(outcome_var, top_vars)])
+  model <- lm(formula, data = model_data)
+
+    fml_upper <- as.formula(
+  paste("outcome_var ~ (", paste(top_vars, collapse = " + "), ")^2")
+)
+ 
+     fml_lower <- as.formula("outcome_var ~ 1")
+  
+  # 6. Perform stepwise selection
+
+     model_selected <- step(
+  object  = model,
+  scope   = list(lower = fml_lower, upper = fml_upper),
+  direction = "both",
+  trace = 0  # Suppress stepwise output
+)
+
+  return(model_selected)
+}
+
+# Create models with top 5 variables
+top5_model <- create_top_n_model(
+  data = dat_sub,
+  outcome_var = "fl_albumin_index_log2",
+  importance_df = rf_results$importance,
+  n_vars = 5
+)
+
+# Print results of top 4 model
+cat("\nModel with top 5 variables from Random Forest:\n")
+summary(top5_model)
+
+
+# Now base on the result of Random-forest we create new albumin
+
+
+
+
+ 
+# if you choose this you will get lots of interaction but Rsquare still low around 40%
+# 5 Important varibels base on the result of RF IMportance
+biomarkers<- c(
+ # "fl_csf_glucose_log2",
+ # "fl_csf_total_protein_log2",
+ # "fl_csf_rbc_log2",
+ # "fl_csf_tnc_log2",
+ # "fl_csf_igg_log2",
+ # "fl_csf_albumin_log2",           
+ # "fl_csf_igg_synthesis_log2",     
+ # "fl_abeta_38_log2",
+ # "fl_csf__ALL__gfap_log2",
+ # "fl_plasma__ALL__gfap_log2",    
+ # "fl_csf__ALL__nfl_log2",         
+ # "fl_plasma__ALL__nfl_log2",
+ # "fl_csf__ALL__ptau_log2",        
+ # "fl_plasma__ALL__ptau_181_log2",
+ # "fl_plasma__ALL__abeta42_40_ratio_log2",
+ # "fl_plasma__ALL__ptau_217_log2",
+ # "fl_csf__ALL__abeta_40_log2",   
+ # "fl_plasma__ALL__abeta_40_log2",
+ # # "fl_csf__ALL__abeta_42_log2" ,   
+ # "fl_plasma__ALL__abeta_42_log2",
+ # "fl_csf__ALL__plgf_log2",
+ # "fl_plasma__ALL__plgf_log2" ,
+ # "fl_csf__ALL__il_1b_log2" ,     
+ # "fl_plasma__ALL__il_1b_log2",
+ # "fl_plasma__ALL__mmp_2_log2" ,
+ # "fl_plasma__ALL__mmp_1_log2",
+"fl_plasma__ALL__mmp_3_log2" ,
+ # "fl_plasma__ALL__mmp_9_log2" ,
+ "fl_plasma__ALL__mmp_10_log2",
+ # "fl_csf__ALL__mmp_10_log2" ,
+ "fl_plasma__ALL__bfgf_log2",
+# "fl_plasma__ALL__flt_1_log2",
+ # "fl_plasma__ALL__tie2_log2" ,
+ "fl_plasma__ALL__vegf_a_log2",
+ "fl_plasma__ALL__vegf_c_log2"
+ # "fl_plasma__ALL__vegf_d_log2"
+
+)
+
+
+
+
+n_complete <- sum(complete.cases(dat_sheet[, c("fl_albumin_index_log2", biomarkers)]))
+print(n_complete) # Only one remained
+
+# sapply(some_biomarkers_vd, function(x) sum(!is.na(dat_sheet[[x]])))
+
+
+
+# 2. Build a formula: TripleDichotomy_VD ~ biomarker1 + biomarker2 + ...
+albumin_form <- as.formula(
+  paste("fl_albumin_index_log2 ~", paste(biomarkers, collapse = " + "))
+)
+
+# Fit main-effects model
+albumin_main <- lm(albumin_form, data = dat_sheet)
+
+summary(albumin_main)
+
+
+# car::Anova(mod_main, type = 3)
+# # 
+# e_plot_lm_diagnostics(mod_main, sw_plot_set = "simple")
+# 
+# # Perform Shapiro-Wilk test on the residuals
+# shapiro_test <- shapiro.test(residuals(mod_main))
+
+
+## -- 2. Define the 'upper' and 'lower' scopes for stepwise selection
+#    Upper includes two-way interactions: (x1 + x2 + ...)^2
+#    Lower is just an intercept-only model: ~ 1
+
+fml_upper_albumin <- as.formula(
+  paste("fl_albumin_index_log2 ~ (", paste(biomarkers, collapse = " + "), ")^2")
+)
+fml_lower_albumin <- as.formula("fl_albumin_index_log2 ~ 1")
+
+## -- 3. Run stepwise selection
+model_selected_albumin <- step(
+  object  = albumin_main,
+  scope   = list(lower = fml_lower_albumin, upper = fml_upper_albumin),
+  direction = "both"
+)
+
+
+
+## -- 4. Inspect the final model
+summary(model_selected_albumin)
+
+
+
+
+# Do I need to add plot contrast? regression assumption? add later? 
+
+
+#─ tidy helpers --------------------------------------------------------------
+library(tidyverse)
+library(glue)
+library(gt)
+library(patchwork)
+library(scales)
+
+pal_okabe <- c("#E69F00", "#56B4E9", "#009E73",
+               "#F0E442", "#0072B2", "#D55E00",
+               "#CC79A7", "#999999")
+
+# 1 Break-point data → nice tibble
+
+
+# turn your `log2_groups` list into a tidy frame
+break_df <- imap_dfr(log2_groups, ~{
+  tibble(
+    order         = .y,
+    n_cases       = .x$complete_cases,
+    added_vars    = setdiff(.x$variables[-1],
+                            if (.y == 1) character(0) else log2_groups[[.y-1]]$variables[-1])
+  )
+}) %>%
+  unnest_longer(added_vars, keep_empty = TRUE) %>%
+  mutate(added_vars = str_remove_all(added_vars,
+                                     "^fl_(plasma|csf)__ALL__|_log2$"))
+
+# 2 Figure 1: attrition curve
+break_plot <- ggplot(break_df,
+                     aes(x = order, y = n_cases)) +
+  geom_line(linewidth = .8, colour = pal_okabe[2]) +
+  geom_point(size = 2, colour  = pal_okabe[1]) +
+  geom_text(aes(label = added_vars),
+            hjust = -0.05, vjust = 0.5, size = 3,
+            family = "mono") +
+  scale_x_continuous(breaks = break_df$order) +
+  scale_y_continuous(labels = comma) +
+  labs(y = "complete cases",
+       x = "biomarker-addition step",
+       title = "Sample-size attrition as biomarkers are added") +
+  theme_minimal(base_size = 11) +
+  theme(panel.grid.minor = element_blank(),
+        axis.text.x = element_text(angle = 60, hjust = 1))
+
+# 3 Figure 2: improved RF-importance plot
+
+
+imp_plot <- ggplot(rf_results$importance, aes(x = reorder(variable, importance), y = importance)) +
+  geom_bar(stat = "identity", fill = "steelblue") +
+  coord_flip() +
+  theme_minimal() +
+  labs(
+    title = "Variable Importance in Random Forest Model",
+    x = "Variables",
+    y = "Importance (%IncMSE)"
+  )
+
+# 4 Figure 3: coefficient plot with model stats in the strip
+# tidy & label the final model  (albumin example shown)
+coef_df <- tidy(model_selected_albumin, conf.int = TRUE) %>% 
+  filter(term != "(Intercept)") %>%                # ← NEW: remove intercept
+  mutate(
+    term    = str_remove_all(term, "^fl_(plasma|csf)__ALL__|_log2$"),
+    term    = if_else(str_detect(term, ":"),         # italicise interactions
+                      paste0("*", term, "*"), term),
+    t_stat  = abs(statistic)                         # keep the t-value for plot 4
+  )
+
+model_stats <- glance(model_selected_albumin)
+
+coef_plot <- ggplot(coef_df,
+                    aes(y = fct_reorder(term, estimate),
+                        x = estimate)) +
+  geom_point(size = 2, colour = pal_okabe[5]) +
+  geom_errorbarh(aes(xmin = conf.low, xmax = conf.high),
+                 height = 0.15, colour = pal_okabe[5]) +
+  geom_vline(xintercept = 0, linetype = "dashed") +
+  labs(y = NULL, x = "β  (95 % CI)",
+       title = glue("Linear model – Albumin (R² {round(model_stats$r.squared,3)}, n = {model_stats$nobs})")) +
+  theme_minimal(base_size = 11)
+
+# t-stat bar 
+
+# Option 4: Combined plot with effect size context
+t_plot <- coef_df %>%
+  mutate(
+    sig_level = case_when(
+      p.value < 0.001 ~ "***",
+      p.value < 0.01  ~ "**",
+      p.value < 0.05  ~ "*",
+      p.value < 0.1   ~ ".",
+      TRUE ~ ""
+    ),
+    sig_color = case_when(
+      p.value < 0.05 ~ "Significant",
+      p.value < 0.1  ~ "Marginal",
+      TRUE ~ "Not significant"
+    )
+  ) %>%
+  ggplot(aes(y = fct_reorder(term, estimate),
+             x = statistic)) +
+  geom_col(aes(fill = sig_color)) +
+  geom_text(aes(label = sig_level, 
+                x = statistic + sign(statistic) * 0.3),
+            size = 4, vjust = 0.5) +
+  scale_fill_manual(values = c("Significant" = "#009E73",
+                               "Marginal" = "#F0E442",
+                               "Not significant" = "#999999"),
+                    name = "Significance") +
+  geom_vline(xintercept = 0, linetype = "solid") +
+  labs(y = NULL, x = "t-statistic",
+       title = "T-statistics with significance levels",
+       subtitle = "*** p<0.001, ** p<0.01, * p<0.05, . p<0.1") +
+  theme_minimal(base_size = 11) +
+  theme(legend.position = "bottom")
+
+# 5 Table 1: breakpoint narrative
+
+tbl_breaks <- break_df %>%
+  group_by(order) %>%
+  summarise(`complete cases` = first(n_cases),
+            `added biomarkers` = paste(added_vars, collapse = ", ")) %>%
+  mutate(step = row_number()) %>%
+  select(step, everything()) %>%
+  gt() %>%
+  tab_header(title = md("**Sample-size breakpoints**")) %>%
+  fmt_number(columns = `complete cases`, sep_mark = ",") %>%
+  tab_style(cell_borders(sides = "top", weight = px(1)),
+            locations = cells_body(rows = 1)) %>%
+  opt_row_striping()
+
+# 6 Table 2: model performance
+tbl_perf <- tibble(
+  outcome = "Albumin index",
+  adj_R2  = round(model_stats$r.squared, 3),
+  RMSE    = round(model_stats$sigma, 3),
+  n       = model_stats$nobs
+) %>%
+  gt() %>%
+  tab_header(title = md("**Final model performance**"))
+
+# 7 Arrange and save / display
+
+
+# side-by-side figures, adjust widths to taste
+(break_plot | imp_plot | coef_plot | t_plot) +
+  plot_layout(widths = c(1.2, 1, 1, 0.9))   # tweak widths as you like
+
+# save
+ggsave("albumin_analysis_plasmaOnly.png", width = 17, height = 4, dpi = 300)
+
+# view tables in the Viewer or knit to Quarto
+tbl_breaks
+tbl_perf
+
+```
+
+Running albumin \~ csf_only …
+
+```{r}
+
+dat_sub|> dplyr::select(-fl_csf_igg_log2) -> dat_sub_without_igg
+
+csf_markers <- dat_sub_without_igg %>%                 # start with your data
+  select(                                             # pick columns …
+    contains("csf"), 
+    fl_albumin_index_log2                             # … and this one explicit name
+  ) %>% 
+  names()   
+
+result <- e_data_complete_by_variable_subset(dat_sub_without_igg, var_list = csf_markers, var_resp = "fl_albumin_index_log2")
+# See all variable names for each row
+result$var_names
+
+
+# OLD WAY also not include everything
+# # Get only plasma biomarkers ending in _log2
+# find_optimal_log2_groups <- function(data, min_cases = 30) {
+#   # Get only plasma markers ending in _log2
+#   csf_markers <- grep("^fl_csf.*_log2$", names(data), value = TRUE)
+#   
+#   # Start with outcome variable
+#   current_vars <- c("fl_albumin_index_log2")
+#   results <- list()
+#   
+#   for(marker in csf_markers) {
+#     temp_vars <- c(current_vars, marker)
+#     complete_cases <- sum(complete.cases(data[, temp_vars]))
+#     
+#     if(complete_cases >= min_cases) {
+#       current_vars <- temp_vars
+#       results[[length(results) + 1]] <- list(
+#         variables = current_vars,
+#         complete_cases = complete_cases
+#       )
+#     }
+#   }
+#   return(results)
+# }
+# 
+# # Apply the function
+# log2_groups <- find_optimal_log2_groups(dat_sub_without_igg)
+# 
+# # Print summary of available biomarkers and sample sizes
+# for(i in seq_along(log2_groups)) {
+#   cat("\nGroup", i, ":\n")
+#   cat("Variables:", paste(log2_groups[[i]]$variables[-1], collapse = ", "), "\n")
+#   cat("Complete cases:", log2_groups[[i]]$complete_cases, "\n")
+# }
+# 
+# # Get the final set of all log2 biomarkers
+# final_log2_vars <- log2_groups[[length(log2_groups)]]$variables
+# 
+# # Print final number of biomarkers and sample size
+# cat("\nFinal model will include:", length(final_log2_vars)-1, "biomarkers\n")
+# cat("With sample size:", log2_groups[[length(log2_groups)]]$complete_cases, "\n")
+# 
+# # Function to print breakpoint summary
+# summarize_breakpoints <- function(groups) {
+#   prev_vars <- NULL
+#   prev_n <- NULL
+#   
+#   cat("Sample Size Breakpoints:\n")
+#   
+#   for(i in seq_along(groups)) {
+#     current_vars <- groups[[i]]$variables[-1]  # exclude outcome variable
+#     current_n <- groups[[i]]$complete_cases
+#     
+#     if(is.null(prev_n) || current_n != prev_n) {
+#       new_vars <- if(is.null(prev_vars)) {
+#         current_vars
+#       } else {
+#         setdiff(current_vars, prev_vars)
+#       }
+#       
+#       # Clean up variable names for display
+#       clean_vars <- gsub("fl_csf__ALL__", "", new_vars)
+#       clean_vars <- gsub("_log2", "", clean_vars)
+#       
+#       cat(sprintf("%d cases: %s\n", 
+#                   current_n,
+#                   if(i == 1) {
+#                     sprintf("starting with %s", paste(clean_vars, collapse = " and "))
+#                   } else {
+#                     sprintf("adding %s", paste(clean_vars, collapse = " and "))
+#                   }))
+#       
+#       prev_vars <- current_vars
+#       prev_n <- current_n
+#     }
+#   }
+# }
+# 
+# # Apply the function to your groups
+# summarize_breakpoints(log2_groups)
+# 
+# # Also show the complete list of final variables
+# cat("\nFinal set of biomarkers:\n")
+# final_vars <- gsub("fl_csf__ALL__", "", 
+#                   gsub("_log2", "", 
+#                        log2_groups[[length(log2_groups)]]$variables[-1]))
+# cat(paste(final_vars, collapse = "\n"))
+
+
+
+# Apply RandomForest to check the important varibels for Albumin index with 7 cases and 61 Observation
+# 6        108     5 "fl_albumin_index_log2 fl_msd_csf_mmp_1_log2                       fl_msd_csf_mmp_3_log2 fl_msd_csf_mmp_9_log2 fl_csf__ALL__mmp_10_log2                                                                                                                                                                                          … 
+# [1] "fl_albumin_index_log2"    "fl_msd_csf_mmp_1_log2"    "fl_msd_csf_mmp_2_log2"    "fl_msd_csf_mmp_3_log2"    "fl_msd_csf_mmp_9_log2"    "fl_csf__ALL__mmp_10_log2" "fl_csf__ALL__nfl_log2"    "fl_csf__ALL__gfap_log2"  
+# [9] "fl_csf__ALL__ptau_log2"   74
+
+ biomarkers<- c(
+ # "fl_csf_glucose_log2",
+ # "fl_csf_total_protein_log2",
+ # "fl_csf_rbc_log2",
+ # "fl_csf_tnc_log2",
+ # "fl_csf_igg_log2",
+ # "fl_csf_albumin_log2",           
+ # "fl_csf_igg_synthesis_log2",     
+ # "fl_abeta_38_log2",
+ "fl_csf__ALL__gfap_log2",
+ # "fl_plasma__ALL__gfap_log2",    
+ "fl_csf__ALL__nfl_log2",
+ # "fl_plasma__ALL__nfl_log2",
+ "fl_csf__ALL__ptau_log2",
+ # "fl_plasma__ALL__ptau_181_log2",
+ # "fl_plasma__ALL__abeta42_40_ratio_log2",
+ # "fl_plasma__ALL__ptau_217_log2",
+ # "fl_csf__ALL__abeta_40_log2",   
+ # "fl_plasma__ALL__abeta_40_log2",
+ # # "fl_csf__ALL__abeta_42_log2" ,   
+ # "fl_plasma__ALL__abeta_42_log2",
+ # "fl_csf__ALL__plgf_log2",
+#  "fl_plasma__ALL__plgf_log2" ,
+ # "fl_csf__ALL__il_1b_log2" ,
+#  "fl_plasma__ALL__il_1b_log2",
+#  "fl_plasma__ALL__mmp_2_log2" ,
+#  "fl_plasma__ALL__mmp_1_log2",
+# "fl_plasma__ALL__mmp_3_log2" ,
+#  "fl_plasma__ALL__mmp_9_log2" ,
+#  "fl_plasma__ALL__mmp_10_log2",
+ "fl_csf__ALL__mmp_10_log2",
+ "fl_msd_csf_mmp_1_log2",
+ "fl_msd_csf_mmp_3_log2",
+ "fl_msd_csf_mmp_9_log2",
+ "fl_msd_csf_mmp_2_log2" 
+#  "fl_plasma__ALL__bfgf_log2",
+# "fl_plasma__ALL__flt_1_log2",
+# "fl_plasma__ALL__tie2_log2" ,
+# "fl_plasma__ALL__vegf_a_log2",
+# "fl_plasma__ALL__vegf_c_log2",
+# "fl_plasma__ALL__vegf_d_log2"
+
+)
+
+
+
+
+library(randomForest)
+library(caret)
+library(ggplot2)
+
+# Function to run Random Forest analysis
+run_rf_analysis <- function(data, outcome_var, predictors, n_trees = 500) {
+  # Prepare data
+  model_data <- na.omit(data[, c(outcome_var, predictors)])
+  
+  # Create formula
+  rf_formula <- as.formula(paste(outcome_var, "~", paste(predictors, collapse = " + ")))
+  
+  # Run Random Forest
+  set.seed(123)  # for reproducibility
+  rf_model <- randomForest(
+    formula = rf_formula,
+    data = model_data,
+    ntree = n_trees,
+    importance = TRUE
+  )
+
+    # Get variable importance
+  var_imp <- importance(rf_model)
+ var_imp_df <- data.frame(
+  variable = rownames(var_imp),  # Keep original variable names
+  variable_clean = gsub("fl_csf__ALL__", "", gsub("_log2", "", rownames(var_imp))),
+  importance = var_imp[, "%IncMSE"],
+  stringsAsFactors = FALSE
+)
+  var_imp_df <- var_imp_df[order(-var_imp_df$importance), ]
+  
+  # Calculate model performance
+  predictions <- predict(rf_model) #If no new data is provided, it predicts for the training data.
+  rmse <- sqrt(mean((model_data[[outcome_var]] - predictions)^2))
+  r2 <- 1 - sum((model_data[[outcome_var]] - predictions)^2) / 
+            sum((model_data[[outcome_var]] - mean(model_data[[outcome_var]]))^2)
+  
+  return(list(
+    model = rf_model,
+    importance = var_imp_df,
+    performance = list(
+      rmse = rmse,
+      r2 = r2,
+      n_obs = nrow(model_data)
+    )
+  ))
+}
+
+# Run Random Forest analysis
+rf_results <- run_rf_analysis(
+  data = dat_sub_without_igg,
+  outcome_var = "fl_albumin_index_log2",
+  predictors = biomarkers
+)
+
+# Print results
+cat("\nRandom Forest Model Performance:\n")
+cat("R-squared:", round(rf_results$performance$r2, 3), "\n")
+cat("RMSE:", round(rf_results$performance$rmse, 3), "\n")
+cat("Number of observations:", rf_results$performance$n_obs, "\n")
+
+# Print variable importance
+cat("\nVariable Importance (top 10):\n")
+print(head(rf_results$importance, 10))
+
+# Plot variable importance
+ggplot(rf_results$importance, aes(x = reorder(variable, importance), y = importance)) +
+  geom_bar(stat = "identity", fill = "steelblue") +
+  coord_flip() +
+  theme_minimal() +
+  labs(
+    title = "Variable Importance in Random Forest Model",
+    x = "Variables",
+    y = "Importance (%IncMSE)"
+  )
+
+# Function to create models with top N variables
+create_top_n_model <- function(data, outcome_var, importance_df, n_vars) {
+  # Use the original variable names from the importance dataframe
+  top_vars <- importance_df$variable[1:n_vars]
+  
+  # Create formula with interactions
+  formula <- as.formula(paste(outcome_var, "~", 
+                            paste(top_vars, collapse = " + ")))
+  
+  # Fit model
+  model_data <- na.omit(data[, c(outcome_var, top_vars)])
+  model <- lm(formula, data = model_data)
+
+    fml_upper <- as.formula(
+  paste("outcome_var ~ (", paste(top_vars, collapse = " + "), ")^2")
+)
+ 
+     fml_lower <- as.formula("outcome_var ~ 1")
+  
+  # 6. Perform stepwise selection
+
+     model_selected <- step(
+  object  = model,
+  scope   = list(lower = fml_lower, upper = fml_upper),
+  direction = "both",
+  trace = 0  # Suppress stepwise output
+)
+
+  return(model_selected)
+}
+
+# Create models with top 4 variables
+top7_model <- create_top_n_model(
+  data = dat_sub_without_igg,
+  outcome_var = "fl_albumin_index_log2",
+  importance_df = rf_results$importance,
+  n_vars = 7
+)
+
+# Print results of top 4 model
+cat("\nModel with top 7 variables from Random Forest:\n")
+summary(top7_model)
+
+
+# Now base on the result of Random-forest we create new albumin with 4 Var
+
+ biomarkers<- c(
+ # "fl_csf_glucose_log2",
+ # "fl_csf_total_protein_log2",
+ # "fl_csf_rbc_log2",
+ # "fl_csf_tnc_log2",
+ "fl_csf_igg_log2",
+ # "fl_csf_albumin_log2",           
+ # "fl_csf_igg_synthesis_log2",     
+ # "fl_abeta_38_log2",
+ "fl_csf__ALL__gfap_log2",
+ # "fl_plasma__ALL__gfap_log2",    
+ # "fl_csf__ALL__nfl_log2",
+ # "fl_plasma__ALL__nfl_log2",
+ "fl_csf__ALL__ptau_log2",
+ # "fl_plasma__ALL__ptau_181_log2",
+ # "fl_plasma__ALL__abeta42_40_ratio_log2",
+ # "fl_plasma__ALL__ptau_217_log2",
+ # "fl_csf__ALL__abeta_40_log2",   
+ # "fl_plasma__ALL__abeta_40_log2",
+ # # "fl_csf__ALL__abeta_42_log2" ,   
+ # "fl_plasma__ALL__abeta_42_log2",
+ # "fl_csf__ALL__plgf_log2",
+#  "fl_plasma__ALL__plgf_log2" ,
+ # "fl_csf__ALL__il_1b_log2" ,
+#  "fl_plasma__ALL__il_1b_log2",
+#  "fl_plasma__ALL__mmp_2_log2" ,
+#  "fl_plasma__ALL__mmp_1_log2",
+# "fl_plasma__ALL__mmp_3_log2" ,
+#  "fl_plasma__ALL__mmp_9_log2" ,
+#  "fl_plasma__ALL__mmp_10_log2",
+ "fl_csf__ALL__mmp_10_log2" 
+#  "fl_plasma__ALL__bfgf_log2",
+# "fl_plasma__ALL__flt_1_log2",
+#  "fl_plasma__ALL__tie2_log2" ,
+#  "fl_plasma__ALL__vegf_a_log2",
+#  "fl_plasma__ALL__vegf_c_log2",
+#  "fl_plasma__ALL__vegf_d_log2"
+
+)
+
+
+
+
+n_complete <- sum(complete.cases(dat_sheet[, c("fl_albumin_index_log2", biomarkers)]))
+print(n_complete) # Only one remained
+
+# sapply(some_biomarkers_vd, function(x) sum(!is.na(dat_sheet[[x]])))
+
+
+
+# 2. Build a formula: TripleDichotomy_VD ~ biomarker1 + biomarker2 + ...
+albumin_form <- as.formula(
+  paste("fl_albumin_index_log2 ~", paste(biomarkers, collapse = " + "))
+)
+
+# Fit main-effects model
+albumin_main <- lm(albumin_form, data = dat_sheet)
+
+summary(albumin_main)
+
+
+# car::Anova(mod_main, type = 3)
+# # 
+# e_plot_lm_diagnostics(mod_main, sw_plot_set = "simple")
+# 
+# # Perform Shapiro-Wilk test on the residuals
+# shapiro_test <- shapiro.test(residuals(mod_main))
+
+
+## -- 2. Define the 'upper' and 'lower' scopes for stepwise selection
+#    Upper includes two-way interactions: (x1 + x2 + ...)^2
+#    Lower is just an intercept-only model: ~ 1
+
+fml_upper_albumin <- as.formula(
+  paste("fl_albumin_index_log2 ~ (", paste(biomarkers, collapse = " + "), ")^2")
+)
+fml_lower_albumin <- as.formula("fl_albumin_index_log2 ~ 1")
+
+## -- 3. Run stepwise selection
+model_selected_albumin <- step(
+  object  = albumin_main,
+  scope   = list(lower = fml_lower_albumin, upper = fml_upper_albumin),
+  direction = "forward"
+)
+
+
+
+## -- 4. Inspect the final model
+summary(model_selected_albumin)
+
+
+
+
+e_plot_scatterplot( dat_plot = dat_sheet,
+  var_x ="fl_csf_igg_log2",
+  var_y = "fl_albumin_index_log2",
+  smooth_all = c("lm")
+  )
+
+
+
+pal_okabe <- c("#E69F00", "#56B4E9", "#009E73",
+               "#F0E442", "#0072B2", "#D55E00",
+               "#CC79A7", "#999999")
+
+
+# turn your `log2_groups` list into a tidy frame
+break_df <- imap_dfr(log2_groups, ~{
+  tibble(
+    order         = .y,
+    n_cases       = .x$complete_cases,
+    added_vars    = setdiff(.x$variables[-1],
+                            if (.y == 1) character(0) else log2_groups[[.y-1]]$variables[-1])
+  )
+}) %>%
+  unnest_longer(added_vars, keep_empty = TRUE) %>%
+  mutate(added_vars = str_remove_all(added_vars,
+                                     "^fl_(plasma|csf)__ALL__|_log2$"))
+
+# 2 Figure 1: attrition curve
+break_plot <- ggplot(break_df,
+                     aes(x = order, y = n_cases)) +
+  geom_line(linewidth = .8, colour = pal_okabe[2]) +
+  geom_point(size = 2, colour  = pal_okabe[1]) +
+  geom_text(aes(label = added_vars),
+            hjust = -0.05, vjust = 0.5, size = 3,
+            family = "mono") +
+  scale_x_continuous(breaks = break_df$order) +
+  scale_y_continuous(labels = comma) +
+  labs(y = "complete cases",
+       x = "biomarker-addition step",
+       title = "Sample-size attrition as biomarkers are added") +
+  theme_minimal(base_size = 11) +
+  theme(panel.grid.minor = element_blank(),
+        axis.text.x = element_text(angle = 60, hjust = 1))
+
+# 3 Figure 2: improved RF-importance plot
+
+
+imp_plot <- ggplot(rf_results$importance, aes(x = reorder(variable, importance), y = importance)) +
+  geom_bar(stat = "identity", fill = "steelblue") +
+  coord_flip() +
+  theme_minimal() +
+  labs(
+    title = "Variable Importance in Random Forest Model",
+    x = "Variables",
+    y = "Importance (%IncMSE)"
+  )
+
+# 4 Figure 3: coefficient plot with model stats in the strip
+# tidy & label the final model  (albumin example shown)
+coef_df <- tidy(model_selected_albumin, conf.int = TRUE) %>% 
+  filter(term != "(Intercept)") %>%                # ← NEW: remove intercept
+  mutate(
+    term    = str_remove_all(term, "^fl_(plasma|csf)__ALL__|_log2$"),
+    term    = if_else(str_detect(term, ":"),         # italicise interactions
+                      paste0("*", term, "*"), term),
+    t_stat  = abs(statistic)                         # keep the t-value for plot 4
+  )
+
+model_stats <- glance(model_selected_albumin)
+
+coef_plot <- ggplot(coef_df,
+                    aes(y = fct_reorder(term, estimate),
+                        x = estimate)) +
+  geom_point(size = 2, colour = pal_okabe[5]) +
+  geom_errorbarh(aes(xmin = conf.low, xmax = conf.high),
+                 height = 0.15, colour = pal_okabe[5]) +
+  geom_vline(xintercept = 0, linetype = "dashed") +
+  labs(y = NULL, x = "β  (95 % CI)",
+       title = glue("Linear model – Albumin (R² {round(model_stats$r.squared,3)}, n = {model_stats$nobs})")) +
+  theme_minimal(base_size = 11)
+
+# t-stat bar 
+
+# Option 4: Combined plot with effect size context
+t_plot <- coef_df %>%
+  mutate(
+    sig_level = case_when(
+      p.value < 0.001 ~ "***",
+      p.value < 0.01  ~ "**",
+      p.value < 0.05  ~ "*",
+      p.value < 0.1   ~ ".",
+      TRUE ~ ""
+    ),
+    sig_color = case_when(
+      p.value < 0.05 ~ "Significant",
+      p.value < 0.1  ~ "Marginal",
+      TRUE ~ "Not significant"
+    )
+  ) %>%
+  ggplot(aes(y = fct_reorder(term, estimate),
+             x = statistic)) +
+  geom_col(aes(fill = sig_color)) +
+  geom_text(aes(label = sig_level, 
+                x = statistic + sign(statistic) * 0.3),
+            size = 4, vjust = 0.5) +
+  scale_fill_manual(values = c("Significant" = "#009E73",
+                               "Marginal" = "#F0E442",
+                               "Not significant" = "#999999"),
+                    name = "Significance") +
+  geom_vline(xintercept = 0, linetype = "solid") +
+  labs(y = NULL, x = "t-statistic",
+       title = "T-statistics with significance levels",
+       subtitle = "*** p<0.001, ** p<0.01, * p<0.05, . p<0.1") +
+  theme_minimal(base_size = 11) +
+  theme(legend.position = "bottom")
+
+# 5 Table 1: breakpoint narrative
+
+tbl_breaks <- break_df %>%
+  group_by(order) %>%
+  summarise(`complete cases` = first(n_cases),
+            `added biomarkers` = paste(added_vars, collapse = ", ")) %>%
+  mutate(step = row_number()) %>%
+  select(step, everything()) %>%
+  gt() %>%
+  tab_header(title = md("**Sample-size breakpoints**")) %>%
+  fmt_number(columns = `complete cases`, sep_mark = ",") %>%
+  tab_style(cell_borders(sides = "top", weight = px(1)),
+            locations = cells_body(rows = 1)) %>%
+  opt_row_striping()
+
+# 6 Table 2: model performance
+tbl_perf <- tibble(
+  outcome = "Albumin index",
+  adj_R2  = round(model_stats$r.squared, 3),
+  RMSE    = round(model_stats$sigma, 3),
+  n       = model_stats$nobs
+) %>%
+  gt() %>%
+  tab_header(title = md("**Final model performance**"))
+
+# 7 Arrange and save / display
+
+
+
+# 5 Table 1: breakpoint narrative
+
+tbl_breaks <- break_df %>%
+  group_by(order) %>%
+  summarise(`complete cases` = first(n_cases),
+            `added biomarkers` = paste(added_vars, collapse = ", ")) %>%
+  mutate(step = row_number()) %>%
+  select(step, everything()) %>%
+  gt() %>%
+  tab_header(title = md("**Sample-size breakpoints**")) %>%
+  fmt_number(columns = `complete cases`, sep_mark = ",") %>%
+  tab_style(cell_borders(sides = "top", weight = px(1)),
+            locations = cells_body(rows = 1)) %>%
+  opt_row_striping()
+
+# 6 Table 2: model performance
+tbl_perf <- tibble(
+  outcome = "Albumin index",
+  adj_R2  = round(model_stats$r.squared, 3),
+  RMSE    = round(model_stats$sigma, 3),
+  n       = model_stats$nobs
+) %>%
+  gt() %>%
+  tab_header(title = md("**Final model performance**"))
+
+# 7 Arrange and save / display
+
+# side-by-side figures, adjust widths to taste
+(break_plot | imp_plot | coef_plot | t_plot) +
+  plot_layout(widths = c(1.2, 1, 1, 0.9))   # tweak widths as you like
+
+# save
+ggsave("albumin_analys_onlycsf_overview.png", width = 17, height = 4, dpi = 300)
+
+# view tables in the Viewer or knit to Quarto
+tbl_breaks
+tbl_perf
+
+```
+
+Running albumin \~ plasma_csf …
+
+```{r}
+# 
+# # Get only plasma biomarkers ending in _log2
+# find_optimal_log2_groups <- function(data, min_cases = 30) {
+#   # Get only plasma markers ending in _log2
+#   plasma_csf_markers <- grep("^fl_(plasma|csf).*_log2$", names(data), value = TRUE)
+#    
+#   # Start with outcome variable
+#   current_vars <- c("fl_albumin_index_log2")
+#   results <- list()
+#   
+#   for(marker in plasma_csf_markers) {
+#     temp_vars <- c(current_vars, marker)
+#     complete_cases <- sum(complete.cases(data[, temp_vars]))
+#     
+#     if(complete_cases >= min_cases) {
+#       current_vars <- temp_vars
+#       results[[length(results) + 1]] <- list(
+#         variables = current_vars,
+#         complete_cases = complete_cases
+#       )
+#     }
+#   }
+#   return(results)
+# }
+# 
+# # Apply the function
+# log2_groups <- find_optimal_log2_groups(dat_sub)
+# 
+# # Print summary of available biomarkers and sample sizes
+# for(i in seq_along(log2_groups)) {
+#   cat("\nGroup", i, ":\n")
+#   cat("Variables:", paste(log2_groups[[i]]$variables[-1], collapse = ", "), "\n")
+#   cat("Complete cases:", log2_groups[[i]]$complete_cases, "\n")
+# }
+# 
+# # Get the final set of all log2 biomarkers
+# final_log2_vars <- log2_groups[[length(log2_groups)]]$variables
+# 
+# # Print final number of biomarkers and sample size
+# cat("\nFinal model will include:", length(final_log2_vars)-1, "biomarkers\n")
+# cat("With sample size:", log2_groups[[length(log2_groups)]]$complete_cases, "\n")
+# 
+# # Function to print breakpoint summary
+# summarize_breakpoints <- function(groups) {
+#   prev_vars <- NULL
+#   prev_n <- NULL
+#   
+#   cat("Sample Size Breakpoints:\n")
+#   
+#   for(i in seq_along(groups)) {
+#     current_vars <- groups[[i]]$variables[-1]  # exclude outcome variable
+#     current_n <- groups[[i]]$complete_cases
+#     
+#     if(is.null(prev_n) || current_n != prev_n) {
+#       new_vars <- if(is.null(prev_vars)) {
+#         current_vars
+#       } else {
+#         setdiff(current_vars, prev_vars)
+#       }
+#       
+#       # Separate CSF and plasma variables
+#       csf_vars <- grep("csf", new_vars, value = TRUE)
+#       plasma_vars <- grep("plasma", new_vars, value = TRUE)
+#       
+#       # Clean up variable names for display but keep CSF/Plasma indicator
+#       clean_vars <- gsub("^fl_(plasma|csf)__ALL__", "\\1: ", new_vars)
+#       clean_vars <- gsub("^fl_csf_", "csf: ", clean_vars)
+#       clean_vars <- gsub("^fl_plasma_", "plasma: ", clean_vars)
+#       clean_vars <- gsub("_log2", "", clean_vars)
+#       
+#       cat(sprintf("%d cases: %s\n", 
+#                   current_n,
+#                   if(i == 1) {
+#                     sprintf("starting with %s", paste(clean_vars, collapse = " and "))
+#                   } else {
+#                     sprintf("adding %s", paste(clean_vars, collapse = " and "))
+#                   }))
+#       
+#       prev_vars <- current_vars
+#       prev_n <- current_n
+#     }
+#   }
+# }
+# 
+# # Apply the function to your groups
+# summarize_breakpoints(log2_groups)
+# 
+# # Also show the complete list of final variables
+# cat("\nFinal set of biomarkers:\n")
+# 
+# # Separate CSF and plasma for final display
+# final_vars <- log2_groups[[length(log2_groups)]]$variables[-1]
+# csf_vars <- grep("csf", final_vars, value = TRUE)
+# plasma_vars <- grep("plasma", final_vars, value = TRUE)
+# 
+# cat("\nCSF biomarkers (", length(csf_vars), "):\n", sep = "")
+# csf_clean <- gsub("^fl_(csf)__ALL__", "", csf_vars)
+# csf_clean <- gsub("^fl_csf_", "", csf_clean)
+# csf_clean <- gsub("_log2", "", csf_clean)
+# cat(paste(csf_clean, collapse = "\n"))
+# 
+# cat("\n\nPlasma biomarkers (", length(plasma_vars), "):\n", sep = "")
+# plasma_clean <- gsub("^fl_(plasma)__ALL__", "", plasma_vars)
+# plasma_clean <- gsub("^fl_plasma_", "", plasma_clean)
+# plasma_clean <- gsub("_log2", "", plasma_clean)
+# cat(paste(plasma_clean, collapse = "\n"))
+
+
+
+dat_sub|> dplyr::select(-fl_csf_igg_log2) -> dat_sub_without_igg
+
+csf_plasma_markers <- dat_sub_without_igg |>
+  select(
+    contains("csf"),
+    contains("plasma"),
+    fl_albumin_index_log2
+  ) %>%
+  names()
+result <- e_data_complete_by_variable_subset(dat_sub_without_igg, var_list = csf_plasma_markers, var_resp = "fl_albumin_index_log2")
+# See all variable names for each row
+result$var_names[8]
+
+
+# Apply RandomForest to check the important varibels for Albumin index with 40 cases both plasma and csf
+# [1] "fl_albumin_index_log2"      "fl_msd_csf_mmp_1_log2"      "fl_msd_csf_mmp_3_log2"      "fl_msd_csf_mmp_9_log2"      "fl_csf__ALL__mmp_10_log2"   "fl_plasma__ALL__mmp_2_log2"
+
+
+ biomarkers<- c(
+  "fl_msd_csf_mmp_1_log2" ,
+  "fl_msd_csf_mmp_3_log2" ,
+  "fl_msd_csf_mmp_9_log2"  ,
+  "fl_csf__ALL__mmp_10_log2",
+  "fl_plasma__ALL__mmp_2_log2"
+ # "fl_csf_glucose_log2",
+ # "fl_csf_total_protein_log2",
+ # "fl_csf_rbc_log2",
+ # "fl_csf_tnc_log2",
+ # "fl_csf_igg_log2",
+ # "fl_csf_albumin_log2",           
+ # "fl_csf_igg_synthesis_log2",     
+ # "fl_abeta_38_log2",
+ # "fl_csf__ALL__gfap_log2",
+ # # "fl_plasma__ALL__gfap_log2",    
+ # "fl_csf__ALL__nfl_log2",
+ # # "fl_plasma__ALL__nfl_log2",
+ # "fl_csf__ALL__ptau_log2",
+ # "fl_plasma__ALL__ptau_181_log2",
+ # "fl_plasma__ALL__abeta42_40_ratio_log2",
+ # "fl_plasma__ALL__ptau_217_log2",
+ # "fl_csf__ALL__abeta_40_log2",   
+ # "fl_plasma__ALL__abeta_40_log2",
+ # # "fl_csf__ALL__abeta_42_log2" ,   
+ # "fl_plasma__ALL__abeta_42_log2",
+#  "fl_csf__ALL__plgf_log2",
+#  # "fl_plasma__ALL__plgf_log2" ,
+#  "fl_csf__ALL__il_1b_log2" ,
+#  # "fl_plasma__ALL__il_1b_log2",
+#  "fl_plasma__ALL__mmp_2_log2" ,
+#  "fl_plasma__ALL__mmp_1_log2",
+# "fl_plasma__ALL__mmp_3_log2" ,
+#  "fl_plasma__ALL__mmp_9_log2" ,
+#  "fl_plasma__ALL__mmp_10_log2",
+#  "fl_csf__ALL__mmp_10_log2" ,
+#  "fl_plasma__ALL__bfgf_log2",
+# "fl_plasma__ALL__flt_1_log2",
+#  "fl_plasma__ALL__tie2_log2" 
+ # "fl_plasma__ALL__vegf_a_log2",
+ # "fl_plasma__ALL__vegf_c_log2",
+ # "fl_plasma__ALL__vegf_d_log2"
+
+)
+
+
+
+n_complete <- sum(complete.cases(dat_sub_without_igg[, c("fl_albumin_index_log2", biomarkers)]))
+print(n_complete) # Only one remained
+
+library(randomForest)
+library(caret)
+library(ggplot2)
+
+# Function to run Random Forest analysis
+run_rf_analysis <- function(data, outcome_var, predictors, n_trees = 500) {
+  # Prepare data
+  model_data <- na.omit(data[, c(outcome_var, predictors)])
+  
+  # Create formula
+  rf_formula <- as.formula(paste(outcome_var, "~", paste(predictors, collapse = " + ")))
+  
+  # Run Random Forest
+  set.seed(123)  # for reproducibility
+  rf_model <- randomForest(
+    formula = rf_formula,
+    data = model_data,
+    ntree = n_trees,
+    importance = TRUE
+  )
+
+    # Get variable importance
+  var_imp <- importance(rf_model)
+  var_imp_df <- data.frame(
+  variable = rownames(var_imp),  # CHANGE: Keep original names
+  variable_clean = gsub("^fl_(plasma|csf)__ALL__", "", gsub("_log2", "", rownames(var_imp))), # For display
+  importance = var_imp[, "%IncMSE"],
+  stringsAsFactors = FALSE
+)
+  var_imp_df <- var_imp_df[order(-var_imp_df$importance), ]
+  
+  # Calculate model performance
+  predictions <- predict(rf_model) #If no new data is provided, it predicts for the training data.
+  rmse <- sqrt(mean((model_data[[outcome_var]] - predictions)^2))
+  r2 <- 1 - sum((model_data[[outcome_var]] - predictions)^2) / 
+            sum((model_data[[outcome_var]] - mean(model_data[[outcome_var]]))^2)
+  
+  return(list(
+    model = rf_model,
+    importance = var_imp_df,
+    performance = list(
+      rmse = rmse,
+      r2 = r2,
+      n_obs = nrow(model_data)
+    )
+  ))
+}
+
+# Run Random Forest analysis
+rf_results <- run_rf_analysis(
+  data = dat_sub_without_igg,
+  outcome_var = "fl_albumin_index_log2",
+  predictors = biomarkers
+)
+
+# Print results
+cat("\nRandom Forest Model Performance:\n")
+cat("R-squared:", round(rf_results$performance$r2, 3), "\n")
+cat("RMSE:", round(rf_results$performance$rmse, 3), "\n")
+cat("Number of observations:", rf_results$performance$n_obs, "\n")
+
+# Print variable importance
+cat("\nVariable Importance (top 10):\n")
+print(head(rf_results$importance, 10))
+
+# Plot variable importance
+ggplot(rf_results$importance, aes(x = reorder(variable, importance), y = importance)) +
+  geom_bar(stat = "identity", fill = "steelblue") +
+  coord_flip() +
+  theme_minimal() +
+  labs(
+    title = "Variable Importance in Random Forest Model",
+    x = "Variables",
+    y = "Importance (%IncMSE)"
+  )
+
+# Function to create models with top N variables
+create_top_n_model <- function(data, outcome_var, importance_df, n_vars) {
+  top_vars <- top_vars <- importance_df$variable[1:n_vars]
+
+  
+  # Create formula with interactions
+  formula <- as.formula(paste(outcome_var, "~", 
+                            paste(top_vars, collapse = " + ")))
+  
+  # Fit model
+  model_data <- na.omit(data[, c(outcome_var, top_vars)])
+  model <- lm(formula, data = model_data)
+
+  fml_upper <- as.formula(
+  paste(outcome_var, "~ (", paste(top_vars, collapse = " + "), ")^2")
+  )
+ 
+     fml_lower <- as.formula("outcome_var ~ 1")
+  
+  # 6. Perform stepwise selection
+
+     model_selected <- step(
+  object  = model,
+  scope   = list(lower = fml_lower, upper = fml_upper),
+  direction = "both",
+  trace = 0  # Suppress stepwise output
+)
+
+  return(model_selected)
+}
+
+# Create models with top 7 variables
+top3_model <- create_top_n_model(
+  data = dat_sub_without_igg,
+  outcome_var = "fl_albumin_index_log2",
+  importance_df = rf_results$importance,
+  n_vars = 3
+)
+
+# Print results of top 4 model
+cat("\nModel with top 3 variables from Random Forest:\n")
+summary(top3_model)
+
+
+# Now base on the result of Random-forest we create new albumin
+
+
+
+library(dplyr)
+
+# 1. Extract columns that start with either "fl_plasma_" or "fl_csf_"
+# biomarker_cols <- dat_all_combine %>%
+#   dplyr::select(matches("^(fl_plasma_|fl_csf_|fl_simoa_|fl_msd_|fl_abeta_).*log2$")) %>%
+#   names()
+
+
+# 
+# biomarker_cols <- dat_all_combine_AD_VD %>%
+#   dplyr::select(matches("^(fl_plasma_|fl_csf_|fl_abeta_38).*log2$")) %>%
+#   names()
+# 
+# biomarker_cols_final <- biomarker_cols[ !grepl("original", biomarker_cols) ]
+# 
+# # Number of complete rows for the variables of interest:
+# # n_complete <- sum(complete.cases(dat_all_combine[, c("TripleDichotomy_VD_log2", biomarker_cols)]))
+# # print(n_complete) # Only one remained
+# 
+# # how many rows remain for each biomarker individually:
+# sapply(biomarker_cols, function(x) sum(!is.na(dat_all_combine_AD_VD[[x]])))
+# 
+# e_data_complete_by_variable_subset(dat_all_combine_AD_VD, var_list = c(some_biomarkers_vd, "fl_albumin_index_log2"), var_resp = "fl_albumin_index_log2")
+ 
+# if you choose this you will get lots of interaction but Rsquare still low around 40%
+# 5 Important varibels base on the result of RF IMportance
+biomarkers<- c(
+ # "fl_csf_glucose_log2",
+ # "fl_csf_total_protein_log2",
+ # "fl_csf_rbc_log2",
+ # "fl_csf_tnc_log2",
+ "fl_csf_igg_log2",
+ # "fl_csf_albumin_log2",           
+ # "fl_csf_igg_synthesis_log2",     
+ # "fl_abeta_38_log2",
+ # "fl_csf__ALL__gfap_log2",
+ # "fl_plasma__ALL__gfap_log2",    
+ # "fl_csf__ALL__nfl_log2",         
+ # "fl_plasma__ALL__nfl_log2",
+ # "fl_csf__ALL__ptau_log2",        
+ # "fl_plasma__ALL__ptau_181_log2",
+ # "fl_plasma__ALL__abeta42_40_ratio_log2",
+ # "fl_plasma__ALL__ptau_217_log2",
+ # "fl_csf__ALL__abeta_40_log2",   
+ # "fl_plasma__ALL__abeta_40_log2",
+ # # "fl_csf__ALL__abeta_42_log2" ,   
+ # "fl_plasma__ALL__abeta_42_log2",
+ "fl_csf__ALL__plgf_log2",
+ # "fl_plasma__ALL__plgf_log2" ,
+ "fl_csf__ALL__il_1b_log2" ,
+ # "fl_plasma__ALL__il_1b_log2",
+ # "fl_plasma__ALL__mmp_2_log2" ,
+ # "fl_plasma__ALL__mmp_1_log2",
+"fl_plasma__ALL__mmp_3_log2" ,
+ # "fl_plasma__ALL__mmp_9_log2" ,
+ # "fl_plasma__ALL__mmp_10_log2",
+ "fl_csf__ALL__mmp_10_log2" ,
+ # "fl_plasma__ALL__bfgf_log2",
+"fl_plasma__ALL__flt_1_log2",
+ "fl_plasma__ALL__tie2_log2" 
+ # "fl_plasma__ALL__vegf_a_log2",
+ # "fl_plasma__ALL__vegf_c_log2"
+ # "fl_plasma__ALL__vegf_d_log2"
+
+)
+
+
+
+
+n_complete <- sum(complete.cases(dat_sheet[, c("fl_albumin_index_log2", biomarkers)]))
+print(n_complete) # Only one remained
+
+# sapply(some_biomarkers_vd, function(x) sum(!is.na(dat_sheet[[x]])))
+
+
+
+# 2. Build a formula: TripleDichotomy_VD ~ biomarker1 + biomarker2 + ...
+albumin_form <- as.formula(
+  paste("fl_albumin_index_log2 ~", paste(biomarkers, collapse = " + "))
+)
+
+# Fit main-effects model
+albumin_main <- lm(albumin_form, data = dat_sheet)
+
+summary(albumin_main)
+
+
+# car::Anova(mod_main, type = 3)
+# # 
+# e_plot_lm_diagnostics(mod_main, sw_plot_set = "simple")
+# 
+# # Perform Shapiro-Wilk test on the residuals
+# shapiro_test <- shapiro.test(residuals(mod_main))
+
+
+## -- 2. Define the 'upper' and 'lower' scopes for stepwise selection
+#    Upper includes two-way interactions: (x1 + x2 + ...)^2
+#    Lower is just an intercept-only model: ~ 1
+
+fml_upper_albumin <- as.formula(
+  paste("fl_albumin_index_log2 ~ (", paste(biomarkers, collapse = " + "), ")^2")
+)
+fml_lower_albumin <- as.formula("fl_albumin_index_log2 ~ 1")
+
+## -- 3. Run stepwise selection
+model_selected_albumin <- step(
+  object  = albumin_main,
+  scope   = list(lower = fml_lower_albumin, upper = fml_upper_albumin),
+  direction = "forward"
+)
+
+
+
+## -- 4. Inspect the final model
+summary(model_selected_albumin)
+
+
+
+pal_okabe <- c("#E69F00", "#56B4E9", "#009E73",
+               "#F0E442", "#0072B2", "#D55E00",
+               "#CC79A7", "#999999")
+
+# 1 Break-point data → nice tibble
+
+
+# turn your `log2_groups` list into a tidy frame
+break_df <- imap_dfr(log2_groups, ~{
+  tibble(
+    order         = .y,
+    n_cases       = .x$complete_cases,
+    added_vars    = setdiff(.x$variables[-1],
+                            if (.y == 1) character(0) else log2_groups[[.y-1]]$variables[-1])
+  )
+}) %>%
+  unnest_longer(added_vars, keep_empty = TRUE) %>%
+  mutate(added_vars = str_remove_all(added_vars,
+                                     "^fl_(plasma|csf)__ALL__|_log2$"))
+
+# 2 Figure 1: attrition curve
+break_plot <- ggplot(break_df,
+                     aes(x = order, y = n_cases)) +
+  geom_line(linewidth = .8, colour = pal_okabe[2]) +
+  geom_point(size = 2, colour  = pal_okabe[1]) +
+  geom_text(aes(label = added_vars),
+            hjust = -0.05, vjust = 0.5, size = 3,
+            family = "mono") +
+  scale_x_continuous(breaks = break_df$order) +
+  scale_y_continuous(labels = comma) +
+  labs(y = "complete cases",
+       x = "biomarker-addition step",
+       title = "Sample-size attrition as biomarkers are added") +
+  theme_minimal(base_size = 11) +
+  theme(panel.grid.minor = element_blank(),
+        axis.text.x = element_text(angle = 60, hjust = 1))
+
+# 3 Figure 2: improved RF-importance plot
+
+
+imp_plot <- ggplot(rf_results$importance, aes(x = reorder(variable, importance), y = importance)) +
+  geom_bar(stat = "identity", fill = "steelblue") +
+  coord_flip() +
+  theme_minimal() +
+  labs(
+    title = "Variable Importance in Random Forest Model",
+    x = "Variables",
+    y = "Importance (%IncMSE)"
+  )
+
+# 4 Figure 3: coefficient plot with model stats in the strip
+# tidy & label the final model  (albumin example shown)
+coef_df <- tidy(model_selected_albumin, conf.int = TRUE) %>% 
+  filter(term != "(Intercept)") %>%                # ← NEW: remove intercept
+  mutate(
+    term    = str_remove_all(term, "^fl_(plasma|csf)__ALL__|_log2$"),
+    term    = if_else(str_detect(term, ":"),         # italicise interactions
+                      paste0("*", term, "*"), term),
+    t_stat  = abs(statistic)                         # keep the t-value for plot 4
+  )
+
+model_stats <- glance(model_selected_albumin)
+
+coef_plot <- ggplot(coef_df,
+                    aes(y = fct_reorder(term, estimate),
+                        x = estimate)) +
+  geom_point(size = 2, colour = pal_okabe[5]) +
+  geom_errorbarh(aes(xmin = conf.low, xmax = conf.high),
+                 height = 0.15, colour = pal_okabe[5]) +
+  geom_vline(xintercept = 0, linetype = "dashed") +
+  labs(y = NULL, x = "β  (95 % CI)",
+       title = glue("Linear model – Albumin (R² {round(model_stats$r.squared,3)}, n = {model_stats$nobs})")) +
+  theme_minimal(base_size = 11)
+
+# t-stat bar 
+
+# Option 4: Combined plot with effect size context
+t_plot <- coef_df %>%
+  mutate(
+    sig_level = case_when(
+      p.value < 0.001 ~ "***",
+      p.value < 0.01  ~ "**",
+      p.value < 0.05  ~ "*",
+      p.value < 0.1   ~ ".",
+      TRUE ~ ""
+    ),
+    sig_color = case_when(
+      p.value < 0.05 ~ "Significant",
+      p.value < 0.1  ~ "Marginal",
+      TRUE ~ "Not significant"
+    )
+  ) %>%
+  ggplot(aes(y = fct_reorder(term, estimate),
+             x = statistic)) +
+  geom_col(aes(fill = sig_color)) +
+  geom_text(aes(label = sig_level, 
+                x = statistic + sign(statistic) * 0.3),
+            size = 4, vjust = 0.5) +
+  scale_fill_manual(values = c("Significant" = "#009E73",
+                               "Marginal" = "#F0E442",
+                               "Not significant" = "#999999"),
+                    name = "Significance") +
+  geom_vline(xintercept = 0, linetype = "solid") +
+  labs(y = NULL, x = "t-statistic",
+       title = "T-statistics with significance levels",
+       subtitle = "*** p<0.001, ** p<0.01, * p<0.05, . p<0.1") +
+  theme_minimal(base_size = 11) +
+  theme(legend.position = "bottom")
+
+# 5 Table 1: breakpoint narrative
+
+tbl_breaks <- break_df %>%
+  group_by(order) %>%
+  summarise(`complete cases` = first(n_cases),
+            `added biomarkers` = paste(added_vars, collapse = ", ")) %>%
+  mutate(step = row_number()) %>%
+  select(step, everything()) %>%
+  gt() %>%
+  tab_header(title = md("**Sample-size breakpoints**")) %>%
+  fmt_number(columns = `complete cases`, sep_mark = ",") %>%
+  tab_style(cell_borders(sides = "top", weight = px(1)),
+            locations = cells_body(rows = 1)) %>%
+  opt_row_striping()
+
+# 6 Table 2: model performance
+tbl_perf <- tibble(
+  outcome = "Albumin index",
+  adj_R2  = round(model_stats$r.squared, 3),
+  RMSE    = round(model_stats$sigma, 3),
+  n       = model_stats$nobs
+) %>%
+  gt() %>%
+  tab_header(title = md("**Final model performance**"))
+
+# 7 Arrange and save / display
+
+
+# side-by-side figures, adjust widths to taste
+(break_plot | imp_plot | coef_plot | t_plot) +
+  plot_layout(widths = c(1.2, 1, 1, 0.9))   # tweak widths as you like
+
+# save
+ggsave("albumin_analys_csf&plasma_overview.png", width = 17, height = 4, dpi = 300)
+
+# view tables in the Viewer or knit to Quarto
+tbl_breaks
+tbl_perf
+
+
+
+
+```
+
+Running mri3t \~ plasma_only …
+
+```{r}
+
+# Get only plasma biomarkers ending in _log2
+find_optimal_log2_groups <- function(data, min_cases = 30) {
+  # Get only plasma markers ending in _log2
+  plasma_markers <- grep("^fl_plasma.*_log2$", names(data), value = TRUE)
+  
+  # Start with outcome variable
+  current_vars <- c("mri_perm_3t_tot")
+  results <- list()
+  
+  for(marker in plasma_markers) {
+    temp_vars <- c(current_vars, marker)
+    complete_cases <- sum(complete.cases(data[, temp_vars]))
+    
+    if(complete_cases >= min_cases) {
+      current_vars <- temp_vars
+      results[[length(results) + 1]] <- list(
+        variables = current_vars,
+        complete_cases = complete_cases
+      )
+    }
+  }
+  return(results)
+}
+
+# Apply the function
+log2_groups <- find_optimal_log2_groups(dat_sub)
+
+# Print summary of available biomarkers and sample sizes
+for(i in seq_along(log2_groups)) {
+  cat("\nGroup", i, ":\n")
+  cat("Variables:", paste(log2_groups[[i]]$variables[-1], collapse = ", "), "\n")
+  cat("Complete cases:", log2_groups[[i]]$complete_cases, "\n")
+}
+
+# Get the final set of all log2 biomarkers
+final_log2_vars <- log2_groups[[length(log2_groups)]]$variables
+
+# Print final number of biomarkers and sample size
+cat("\nFinal model will include:", length(final_log2_vars)-1, "biomarkers\n")
+cat("With sample size:", log2_groups[[length(log2_groups)]]$complete_cases, "\n")
+
+# Function to print breakpoint summary
+summarize_breakpoints <- function(groups) {
+  prev_vars <- NULL
+  prev_n <- NULL
+  
+  cat("Sample Size Breakpoints:\n")
+  
+  for(i in seq_along(groups)) {
+    current_vars <- groups[[i]]$variables[-1]  # exclude outcome variable
+    current_n <- groups[[i]]$complete_cases
+    
+    if(is.null(prev_n) || current_n != prev_n) {
+      new_vars <- if(is.null(prev_vars)) {
+        current_vars
+      } else {
+        setdiff(current_vars, prev_vars)
+      }
+      
+      # Clean up variable names for display
+      clean_vars <- gsub("fl_plasma__ALL__", "", new_vars)
+      clean_vars <- gsub("_log2", "", clean_vars)
+      
+      cat(sprintf("%d cases: %s\n", 
+                  current_n,
+                  if(i == 1) {
+                    sprintf("starting with %s", paste(clean_vars, collapse = " and "))
+                  } else {
+                    sprintf("adding %s", paste(clean_vars, collapse = " and "))
+                  }))
+      
+      prev_vars <- current_vars
+      prev_n <- current_n
+    }
+  }
+}
+
+# Apply the function to your groups
+summarize_breakpoints(log2_groups)
+
+# Also show the complete list of final variables
+cat("\nFinal set of biomarkers:\n")
+final_vars <- gsub("fl_plasma__ALL__", "", 
+                  gsub("_log2", "", 
+                       log2_groups[[length(log2_groups)]]$variables[-1]))
+cat(paste(final_vars, collapse = "\n"))
+
+
+
+# Apply RandomForest to check the important Var base on 10 var and 54 Observation
+
+
+
+ biomarkers<- c(
+ # "fl_csf_glucose_log2",
+ # "fl_csf_total_protein_log2",
+ # "fl_csf_rbc_log2",
+ # "fl_csf_tnc_log2",
+ # "fl_csf_igg_log2",
+ # "fl_csf_albumin_log2",           
+ # "fl_csf_igg_synthesis_log2",     
+ # "fl_abeta_38_log2",
+ # "fl_csf__ALL__gfap_log2",
+ # "fl_plasma__ALL__gfap_log2",    
+ # "fl_csf__ALL__nfl_log2",         
+ # "fl_plasma__ALL__nfl_log2",
+ # "fl_csf__ALL__ptau_log2",        
+ # "fl_plasma__ALL__ptau_181_log2",
+ # "fl_plasma__ALL__abeta42_40_ratio_log2",
+ # "fl_plasma__ALL__ptau_217_log2",
+ # "fl_csf__ALL__abeta_40_log2",   
+ # "fl_plasma__ALL__abeta_40_log2",
+ # # "fl_csf__ALL__abeta_42_log2" ,   
+ # "fl_plasma__ALL__abeta_42_log2",
+ # "fl_csf__ALL__plgf_log2",
+ # "fl_plasma__ALL__plgf_log2" ,
+ # "fl_csf__ALL__il_1b_log2" ,     
+ # "fl_plasma__ALL__il_1b_log2",
+ "fl_plasma__ALL__mmp_2_log2" ,
+ "fl_plasma__ALL__mmp_1_log2",
+"fl_plasma__ALL__mmp_3_log2" ,
+ "fl_plasma__ALL__mmp_9_log2" ,
+ "fl_plasma__ALL__mmp_10_log2",
+ # "fl_csf__ALL__mmp_10_log2" ,
+ "fl_plasma__ALL__bfgf_log2",
+"fl_plasma__ALL__flt_1_log2",
+ "fl_plasma__ALL__tie2_log2" ,
+ "fl_plasma__ALL__vegf_a_log2",
+ "fl_plasma__ALL__vegf_c_log2"
+ # "fl_plasma__ALL__vegf_d_log2"
+
+)
+
+
+
+
+library(randomForest)
+library(caret)
+library(ggplot2)
+
+# Function to run Random Forest analysis
+run_rf_analysis <- function(data, outcome_var, predictors, n_trees = 500) {
+  # Prepare data
+  model_data <- na.omit(data[, c(outcome_var, predictors)])
+  
+  # Create formula
+  rf_formula <- as.formula(paste(outcome_var, "~", paste(predictors, collapse = " + ")))
+  
+  # Run Random Forest
+  set.seed(123)  # for reproducibility
+  rf_model <- randomForest(
+    formula = rf_formula,
+    data = model_data,
+    ntree = n_trees,
+    importance = TRUE
+  )
+
+    # Get variable importance
+  var_imp <- importance(rf_model)
+  var_imp_df <- data.frame(
+    variable = gsub("fl_plasma__ALL__", "", gsub("_log2", "", rownames(var_imp))),
+    importance = var_imp[, "%IncMSE"],  # Using %IncMSE as importance measure
+    stringsAsFactors = FALSE
+  )
+  var_imp_df <- var_imp_df[order(-var_imp_df$importance), ]
+  
+  # Calculate model performance
+  predictions <- predict(rf_model) #If no new data is provided, it predicts for the training data.
+  rmse <- sqrt(mean((model_data[[outcome_var]] - predictions)^2))
+  r2 <- 1 - sum((model_data[[outcome_var]] - predictions)^2) / 
+            sum((model_data[[outcome_var]] - mean(model_data[[outcome_var]]))^2)
+  
+  return(list(
+    model = rf_model,
+    importance = var_imp_df,
+    performance = list(
+      rmse = rmse,
+      r2 = r2,
+      n_obs = nrow(model_data)
+    )
+  ))
+}
+
+# Run Random Forest analysis
+rf_results <- run_rf_analysis(
+  data = dat_sub,
+  outcome_var = "mri_perm_3t_tot",
+  predictors = biomarkers
+)
+
+# Print results
+cat("\nRandom Forest Model Performance:\n")
+cat("R-squared:", round(rf_results$performance$r2, 3), "\n")
+cat("RMSE:", round(rf_results$performance$rmse, 3), "\n")
+cat("Number of observations:", rf_results$performance$n_obs, "\n")
+
+# Print variable importance
+cat("\nVariable Importance (top 10):\n")
+print(head(rf_results$importance, 10))
+
+# Plot variable importance
+ggplot(rf_results$importance, aes(x = reorder(variable, importance), y = importance)) +
+  geom_bar(stat = "identity", fill = "steelblue") +
+  coord_flip() +
+  theme_minimal() +
+  labs(
+    title = "Variable Importance in Random Forest Model",
+    x = "Variables",
+    y = "Importance (%IncMSE)"
+  )
+
+# Function to create models with top N variables
+create_top_n_model <- function(data, outcome_var, importance_df, n_vars) {
+  top_vars <- paste0("fl_plasma__ALL__", 
+                    importance_df$variable[1:n_vars], 
+                    "_log2")
+  
+  # Create formula with interactions
+  formula <- as.formula(paste(outcome_var, "~", 
+                            paste(top_vars, collapse = " + ")))
+  
+  # Fit model
+  model_data <- na.omit(data[, c(outcome_var, top_vars)])
+  model <- lm(formula, data = model_data)
+
+    fml_upper <- as.formula(
+  paste("outcome_var ~ (", paste(top_vars, collapse = " + "), ")^2")
+)
+ 
+     fml_lower <- as.formula("outcome_var ~ 1")
+  
+  # 6. Perform stepwise selection
+
+     model_selected <- step(
+  object  = model,
+  scope   = list(lower = fml_lower, upper = fml_upper),
+  direction = "both",
+  trace = 0  # Suppress stepwise output
+)
+
+  return(model_selected)
+}
+
+# Create models with top 4 variables
+top6_model <- create_top_n_model(
+  data = dat_sub,
+  outcome_var = "mri_perm_3t_tot",
+  importance_df = rf_results$importance,
+  n_vars = 6
+)
+
+# Print results of top 4 model
+cat("\nModel with top 5 variables from Random Forest:\n")
+summary(top6_model)
+
+
+# Now base on the result of Random-forest we create new albumin
+
+
+
+# if you choose this you will get lots of interaction but Rsquare still low around 40%
+# 5 Important varibels base on the result of RF IMportance
+biomarkers<- c(
+ # "fl_csf_glucose_log2",
+ # "fl_csf_total_protein_log2",
+ # "fl_csf_rbc_log2",
+ # "fl_csf_tnc_log2",
+ # "fl_csf_igg_log2",
+ # "fl_csf_albumin_log2",           
+ # "fl_csf_igg_synthesis_log2",     
+ # "fl_abeta_38_log2",
+ # "fl_csf__ALL__gfap_log2",
+ # "fl_plasma__ALL__gfap_log2",    
+ # "fl_csf__ALL__nfl_log2",         
+ # "fl_plasma__ALL__nfl_log2",
+ # "fl_csf__ALL__ptau_log2",        
+ # "fl_plasma__ALL__ptau_181_log2",
+ # "fl_plasma__ALL__abeta42_40_ratio_log2",
+ # "fl_plasma__ALL__ptau_217_log2",
+ # "fl_csf__ALL__abeta_40_log2",   
+ # "fl_plasma__ALL__abeta_40_log2",
+ # # "fl_csf__ALL__abeta_42_log2" ,   
+ # "fl_plasma__ALL__abeta_42_log2",
+ # "fl_csf__ALL__plgf_log2",
+ # "fl_plasma__ALL__plgf_log2" ,
+ # "fl_csf__ALL__il_1b_log2" ,     
+ # "fl_plasma__ALL__il_1b_log2",
+ "fl_plasma__ALL__mmp_2_log2" ,
+ "fl_plasma__ALL__mmp_1_log2",
+"fl_plasma__ALL__mmp_3_log2" ,
+ # "fl_plasma__ALL__mmp_9_log2" ,
+ # "fl_plasma__ALL__mmp_10_log2",
+ # "fl_csf__ALL__mmp_10_log2" ,
+ "fl_plasma__ALL__bfgf_log2",
+"fl_plasma__ALL__flt_1_log2",
+ # "fl_plasma__ALL__tie2_log2" ,
+ # "fl_plasma__ALL__vegf_a_log2",
+ "fl_plasma__ALL__vegf_c_log2"
+ # "fl_plasma__ALL__vegf_d_log2"
+
+)
+
+
+
+
+n_complete <- sum(complete.cases(dat_sheet[, c("mri_perm_3t_tot", biomarkers)]))
+print(n_complete) # Only one remained
+
+# sapply(some_biomarkers_vd, function(x) sum(!is.na(dat_sheet[[x]])))
+
+
+
+# 2. Build a formula: TripleDichotomy_VD ~ biomarker1 + biomarker2 + ...
+mri_form <- as.formula(
+  paste("mri_perm_3t_tot ~", paste(biomarkers, collapse = " + "))
+)
+
+# Fit main-effects model
+mri_main <- lm(mri_form, data = dat_sheet)
+
+summary(mri_main)
+
+
+# car::Anova(mod_main, type = 3)
+# # 
+# e_plot_lm_diagnostics(mod_main, sw_plot_set = "simple")
+# 
+# # Perform Shapiro-Wilk test on the residuals
+# shapiro_test <- shapiro.test(residuals(mod_main))
+
+
+## -- 2. Define the 'upper' and 'lower' scopes for stepwise selection
+#    Upper includes two-way interactions: (x1 + x2 + ...)^2
+#    Lower is just an intercept-only model: ~ 1
+
+fml_upper_mri <- as.formula(
+  paste("mri_perm_3t_tot ~ (", paste(biomarkers, collapse = " + "), ")^2")
+)
+fml_lower_mri <- as.formula("mri_perm_3t_tot ~ 1")
+
+## -- 3. Run stepwise selection
+model_selected_albumin <- step(
+  object  = mri_main,
+  scope   = list(lower = fml_lower_mri, upper = fml_upper_mri),
+  direction = "forward"
+)
+
+
+
+## -- 4. Inspect the final model
+summary(model_selected_albumin)
+
+
+
+
+pal_okabe <- c("#E69F00", "#56B4E9", "#009E73",
+               "#F0E442", "#0072B2", "#D55E00",
+               "#CC79A7", "#999999")
+
+# 1 Break-point data → nice tibble
+
+
+# turn your `log2_groups` list into a tidy frame
+break_df <- imap_dfr(log2_groups, ~{
+  tibble(
+    order         = .y,
+    n_cases       = .x$complete_cases,
+    added_vars    = setdiff(.x$variables[-1],
+                            if (.y == 1) character(0) else log2_groups[[.y-1]]$variables[-1])
+  )
+}) %>%
+  unnest_longer(added_vars, keep_empty = TRUE) %>%
+  mutate(added_vars = str_remove_all(added_vars,
+                                     "^fl_(plasma|csf)__ALL__|_log2$"))
+
+# 2 Figure 1: attrition curve
+break_plot <- ggplot(break_df,
+                     aes(x = order, y = n_cases)) +
+  geom_line(linewidth = .8, colour = pal_okabe[2]) +
+  geom_point(size = 2, colour  = pal_okabe[1]) +
+  geom_text(aes(label = added_vars),
+            hjust = -0.05, vjust = 0.5, size = 3,
+            family = "mono") +
+  scale_x_continuous(breaks = break_df$order) +
+  scale_y_continuous(labels = comma) +
+  labs(y = "complete cases",
+       x = "biomarker-addition step",
+       title = "Sample-size attrition as biomarkers are added") +
+  theme_minimal(base_size = 11) +
+  theme(panel.grid.minor = element_blank(),
+        axis.text.x = element_text(angle = 60, hjust = 1))
+
+# 3 Figure 2: improved RF-importance plot
+
+
+imp_plot <- ggplot(rf_results$importance, aes(x = reorder(variable, importance), y = importance)) +
+  geom_bar(stat = "identity", fill = "steelblue") +
+  coord_flip() +
+  theme_minimal() +
+  labs(
+    title = "Variable Importance in Random Forest Model",
+    x = "Variables",
+    y = "Importance (%IncMSE)"
+  )
+
+# 4 Figure 3: coefficient plot with model stats in the strip
+# tidy & label the final model  (albumin example shown)
+coef_df <- tidy(model_selected_albumin, conf.int = TRUE) %>% 
+  filter(term != "(Intercept)") %>%                # ← NEW: remove intercept
+  mutate(
+    term    = str_remove_all(term, "^fl_(plasma|csf)__ALL__|_log2$"),
+    term    = if_else(str_detect(term, ":"),         # italicise interactions
+                      paste0("*", term, "*"), term),
+    t_stat  = abs(statistic)                         # keep the t-value for plot 4
+  )
+
+model_stats <- glance(model_selected_albumin)
+
+coef_plot <- ggplot(coef_df,
+                    aes(y = fct_reorder(term, estimate),
+                        x = estimate)) +
+  geom_point(size = 2, colour = pal_okabe[5]) +
+  geom_errorbarh(aes(xmin = conf.low, xmax = conf.high),
+                 height = 0.15, colour = pal_okabe[5]) +
+  geom_vline(xintercept = 0, linetype = "dashed") +
+  labs(y = NULL, x = "β  (95 % CI)",
+       title = glue("Linear model – Albumin (R² {round(model_stats$r.squared,3)}, n = {model_stats$nobs})")) +
+  theme_minimal(base_size = 11)
+
+# t-stat bar 
+
+# Option 4: Combined plot with effect size context
+t_plot <- coef_df %>%
+  mutate(
+    sig_level = case_when(
+      p.value < 0.001 ~ "***",
+      p.value < 0.01  ~ "**",
+      p.value < 0.05  ~ "*",
+      p.value < 0.1   ~ ".",
+      TRUE ~ ""
+    ),
+    sig_color = case_when(
+      p.value < 0.05 ~ "Significant",
+      p.value < 0.1  ~ "Marginal",
+      TRUE ~ "Not significant"
+    )
+  ) %>%
+  ggplot(aes(y = fct_reorder(term, estimate),
+             x = statistic)) +
+  geom_col(aes(fill = sig_color)) +
+  geom_text(aes(label = sig_level, 
+                x = statistic + sign(statistic) * 0.3),
+            size = 4, vjust = 0.5) +
+  scale_fill_manual(values = c("Significant" = "#009E73",
+                               "Marginal" = "#F0E442",
+                               "Not significant" = "#999999"),
+                    name = "Significance") +
+  geom_vline(xintercept = 0, linetype = "solid") +
+  labs(y = NULL, x = "t-statistic",
+       title = "T-statistics with significance levels",
+       subtitle = "*** p<0.001, ** p<0.01, * p<0.05, . p<0.1") +
+  theme_minimal(base_size = 11) +
+  theme(legend.position = "bottom")
+
+# 5 Table 1: breakpoint narrative
+
+tbl_breaks <- break_df %>%
+  group_by(order) %>%
+  summarise(`complete cases` = first(n_cases),
+            `added biomarkers` = paste(added_vars, collapse = ", ")) %>%
+  mutate(step = row_number()) %>%
+  select(step, everything()) %>%
+  gt() %>%
+  tab_header(title = md("**Sample-size breakpoints**")) %>%
+  fmt_number(columns = `complete cases`, sep_mark = ",") %>%
+  tab_style(cell_borders(sides = "top", weight = px(1)),
+            locations = cells_body(rows = 1)) %>%
+  opt_row_striping()
+
+# 6 Table 2: model performance
+tbl_perf <- tibble(
+  outcome = "Albumin index",
+  adj_R2  = round(model_stats$r.squared, 3),
+  RMSE    = round(model_stats$sigma, 3),
+  n       = model_stats$nobs
+) %>%
+  gt() %>%
+  tab_header(title = md("**Final model performance**"))
+
+# 7 Arrange and save / display
+
+
+# side-by-side figures, adjust widths to taste
+(break_plot | imp_plot | coef_plot | t_plot) +
+  plot_layout(widths = c(1.2, 1, 1, 0.9))   # tweak widths as you like
+
+# save
+ggsave("mri_analys_onlyplasma_overview.png", width = 17, height = 4, dpi = 300)
+
+# view tables in the Viewer or knit to Quarto
+tbl_breaks
+tbl_perf
+```
+
+Running mri3t \~ csf_only …
+
+```{r}
+# Get only plasma biomarkers ending in _log2
+# find_optimal_log2_groups <- function(data, min_cases = 30) {
+#   # Get only plasma markers ending in _log2
+#   csf_markers <- grep("^fl_csf.*_log2$", names(data), value = TRUE)
+#   
+#   # Start with outcome variable
+#   current_vars <- c("mri_perm_3t_tot")
+#   results <- list()
+#   
+#   for(marker in csf_markers) {
+#     temp_vars <- c(current_vars, marker)
+#     complete_cases <- sum(complete.cases(data[, temp_vars]))
+#     
+#     if(complete_cases >= min_cases) {
+#       current_vars <- temp_vars
+#       results[[length(results) + 1]] <- list(
+#         variables = current_vars,
+#         complete_cases = complete_cases
+#       )
+#     }
+#   }
+#   return(results)
+# }
+# 
+# # Apply the function
+# log2_groups <- find_optimal_log2_groups(dat_sub)
+# 
+# # Print summary of available biomarkers and sample sizes
+# for(i in seq_along(log2_groups)) {
+#   cat("\nGroup", i, ":\n")
+#   cat("Variables:", paste(log2_groups[[i]]$variables[-1], collapse = ", "), "\n")
+#   cat("Complete cases:", log2_groups[[i]]$complete_cases, "\n")
+# }
+# 
+# # Get the final set of all log2 biomarkers
+# final_log2_vars <- log2_groups[[length(log2_groups)]]$variables
+# 
+# # Print final number of biomarkers and sample size
+# cat("\nFinal model will include:", length(final_log2_vars)-1, "biomarkers\n")
+# cat("With sample size:", log2_groups[[length(log2_groups)]]$complete_cases, "\n")
+# 
+# # Function to print breakpoint summary
+# summarize_breakpoints <- function(groups) {
+#   prev_vars <- NULL
+#   prev_n <- NULL
+#   
+#   cat("Sample Size Breakpoints:\n")
+#   
+#   for(i in seq_along(groups)) {
+#     current_vars <- groups[[i]]$variables[-1]  # exclude outcome variable
+#     current_n <- groups[[i]]$complete_cases
+#     
+#     if(is.null(prev_n) || current_n != prev_n) {
+#       new_vars <- if(is.null(prev_vars)) {
+#         current_vars
+#       } else {
+#         setdiff(current_vars, prev_vars)
+#       }
+#       
+#       # Clean up variable names for display
+#       clean_vars <- gsub("fl_csf__ALL__", "", new_vars)
+#       clean_vars <- gsub("_log2", "", clean_vars)
+#       
+#       cat(sprintf("%d cases: %s\n", 
+#                   current_n,
+#                   if(i == 1) {
+#                     sprintf("starting with %s", paste(clean_vars, collapse = " and "))
+#                   } else {
+#                     sprintf("adding %s", paste(clean_vars, collapse = " and "))
+#                   }))
+#       
+#       prev_vars <- current_vars
+#       prev_n <- current_n
+#     }
+#   }
+# }
+# 
+# # Apply the function to your groups
+# summarize_breakpoints(log2_groups)
+# 
+# # Also show the complete list of final variables
+# cat("\nFinal set of biomarkers:\n")
+# final_vars <- gsub("fl_csf__ALL__", "", 
+#                   gsub("_log2", "", 
+#                        log2_groups[[length(log2_groups)]]$variables[-1]))
+# cat(paste(final_vars, collapse = "\n"))
+# 
+
+
+
+dat_sub|> dplyr::select(-fl_csf_igg_log2) -> dat_sub_without_igg
+
+csf_mri_markers <- dat_sub_without_igg |>
+  select(
+    contains("csf"),
+    mri_perm_3t_tot
+  ) %>%
+  names()
+result <- e_data_complete_by_variable_subset(dat_sub_without_igg, var_list = csf_mri_markers, var_resp = "mri_perm_3t_tot")
+# See all variable names for each row
+result$var_names[5]
+
+
+# Apply RandomForest to check the important varibels for mri, 7 cases and 38 Observation
+
+# [[1]]
+# [1] "mri_perm_3t_tot"          "fl_msd_csf_mmp_1_log2"    "fl_msd_csf_mmp_2_log2"    "fl_msd_csf_mmp_3_log2"    "fl_msd_csf_mmp_9_log2"    "fl_csf__ALL__mmp_10_log2" "fl_csf__ALL__ptau_log2"  
+# 51
+
+ biomarkers<- c(
+ # "fl_csf_glucose_log2",
+ # "fl_csf_total_protein_log2",
+ # "fl_csf_rbc_log2",
+ # "fl_csf_tnc_log2",
+#  "fl_csf_igg_log2",
+#  # "fl_csf_albumin_log2",           
+#  # "fl_csf_igg_synthesis_log2",     
+#  # "fl_abeta_38_log2",
+#  "fl_csf__ALL__gfap_log2",
+#  # "fl_plasma__ALL__gfap_log2",    
+#  "fl_csf__ALL__nfl_log2",
+#  # "fl_plasma__ALL__nfl_log2",
+#  "fl_csf__ALL__ptau_log2",
+#  # "fl_plasma__ALL__ptau_181_log2",
+#  # "fl_plasma__ALL__abeta42_40_ratio_log2",
+#  # "fl_plasma__ALL__ptau_217_log2",
+#  # "fl_csf__ALL__abeta_40_log2",   
+#  # "fl_plasma__ALL__abeta_40_log2",
+#  # # "fl_csf__ALL__abeta_42_log2" ,   
+#  # "fl_plasma__ALL__abeta_42_log2",
+#  "fl_csf__ALL__plgf_log2",
+# #  "fl_plasma__ALL__plgf_log2" ,
+#  "fl_csf__ALL__il_1b_log2" ,
+#  "fl_plasma__ALL__il_1b_log2",
+#  "fl_plasma__ALL__mmp_2_log2" ,
+#  "fl_plasma__ALL__mmp_1_log2",
+# "fl_plasma__ALL__mmp_3_log2" ,
+#  "fl_plasma__ALL__mmp_9_log2" ,
+#  "fl_plasma__ALL__mmp_10_log2",
+ "fl_csf__ALL__mmp_10_log2" ,
+ "fl_msd_csf_mmp_1_log2",
+ "fl_msd_csf_mmp_2_log2",
+ "fl_msd_csf_mmp_3_log2",
+ "fl_msd_csf_mmp_9_log2",
+ "fl_csf__ALL__ptau_log2"
+#  "fl_plasma__ALL__bfgf_log2",
+# "fl_plasma__ALL__flt_1_log2",
+#  "fl_plasma__ALL__tie2_log2" ,
+#  "fl_plasma__ALL__vegf_a_log2",
+#  "fl_plasma__ALL__vegf_c_log2",
+#  "fl_plasma__ALL__vegf_d_log2"
+
+)
+
+
+
+
+library(randomForest)
+library(caret)
+library(ggplot2)
+
+# Function to run Random Forest analysis
+run_rf_analysis <- function(data, outcome_var, predictors, n_trees = 500) {
+  # Prepare data
+  model_data <- na.omit(data[, c(outcome_var, predictors)])
+  
+  # Create formula
+  rf_formula <- as.formula(paste(outcome_var, "~", paste(predictors, collapse = " + ")))
+  
+  # Run Random Forest
+  set.seed(123)  # for reproducibility
+  rf_model <- randomForest(
+    formula = rf_formula,
+    data = model_data,
+    ntree = n_trees,
+    importance = TRUE
+  )
+
+    # Get variable importance
+  var_imp <- importance(rf_model)
+ var_imp_df <- data.frame(
+  variable = rownames(var_imp),  # Keep original variable names
+  variable_clean = gsub("fl_csf__ALL__", "", gsub("_log2", "", rownames(var_imp))),
+  importance = var_imp[, "%IncMSE"],
+  stringsAsFactors = FALSE
+)
+  var_imp_df <- var_imp_df[order(-var_imp_df$importance), ]
+  
+  # Calculate model performance
+  predictions <- predict(rf_model) #If no new data is provided, it predicts for the training data.
+  rmse <- sqrt(mean((model_data[[outcome_var]] - predictions)^2))
+  r2 <- 1 - sum((model_data[[outcome_var]] - predictions)^2) / 
+            sum((model_data[[outcome_var]] - mean(model_data[[outcome_var]]))^2)
+  
+  return(list(
+    model = rf_model,
+    importance = var_imp_df,
+    performance = list(
+      rmse = rmse,
+      r2 = r2,
+      n_obs = nrow(model_data)
+    )
+  ))
+}
+
+# Run Random Forest analysis
+rf_results <- run_rf_analysis(
+  data = dat_sub_without_igg,
+  outcome_var = "mri_perm_3t_tot",
+  predictors = biomarkers
+)
+
+# Print results
+cat("\nRandom Forest Model Performance:\n")
+cat("R-squared:", round(rf_results$performance$r2, 3), "\n")
+cat("RMSE:", round(rf_results$performance$rmse, 3), "\n")
+cat("Number of observations:", rf_results$performance$n_obs, "\n")
+
+# Print variable importance
+cat("\nVariable Importance (top 10):\n")
+print(head(rf_results$importance, 10))
+
+# Plot variable importance
+ggplot(rf_results$importance, aes(x = reorder(variable, importance), y = importance)) +
+  geom_bar(stat = "identity", fill = "steelblue") +
+  coord_flip() +
+  theme_minimal() +
+  labs(
+    title = "Variable Importance in Random Forest Model",
+    x = "Variables",
+    y = "Importance (%IncMSE)"
+  )
+
+# Function to create models with top N variables
+create_top_n_model <- function(data, outcome_var, importance_df, n_vars) {
+  # Use the original variable names from the importance dataframe
+  top_vars <- importance_df$variable[1:n_vars]
+  
+  # Create formula with interactions
+  formula <- as.formula(paste(outcome_var, "~", 
+                            paste(top_vars, collapse = " + ")))
+  
+  # Fit model
+  model_data <- na.omit(data[, c(outcome_var, top_vars)])
+  model <- lm(formula, data = model_data)
+
+    fml_upper <- as.formula(
+  paste("outcome_var ~ (", paste(top_vars, collapse = " + "), ")^2")
+)
+ 
+     fml_lower <- as.formula("outcome_var ~ 1")
+  
+  # 6. Perform stepwise selection
+
+     model_selected <- step(
+  object  = model,
+  scope   = list(lower = fml_lower, upper = fml_upper),
+  direction = "both",
+  trace = 0  # Suppress stepwise output
+)
+
+  return(model_selected)
+}
+
+# Create models with top 4 variables
+top2_model <- create_top_n_model(
+  data = dat_sub_without_igg,
+  outcome_var = "mri_perm_3t_tot",
+  importance_df = rf_results$importance,
+  n_vars = 2
+)
+
+# Print results of top 4 model
+cat("\nModel with top 2 variables from Random Forest:\n")
+summary(top2_model)
+
+
+# Now base on the result of Random-forest we create new albumin
+
+
+
+library(dplyr)
+
+# 1. Extract columns that start with either "fl_plasma_" or "fl_csf_"
+# biomarker_cols <- dat_all_combine %>%
+#   dplyr::select(matches("^(fl_plasma_|fl_csf_|fl_simoa_|fl_msd_|fl_abeta_).*log2$")) %>%
+#   names()
+
+
+
+
+ 
+# if you choose this you will get lots of interaction but Rsquare still low around 40%
+# 5 Important varibels base on the result of RF IMportance
+
+ biomarkers<- c(
+ # "fl_csf_glucose_log2",
+ # "fl_csf_total_protein_log2",
+ # "fl_csf_rbc_log2",
+ # "fl_csf_tnc_log2",
+ "fl_csf_igg_log2",
+ # "fl_csf_albumin_log2",           
+ # "fl_csf_igg_synthesis_log2",     
+ # "fl_abeta_38_log2",
+ "fl_csf__ALL__gfap_log2",
+ # "fl_plasma__ALL__gfap_log2",    
+ "fl_csf__ALL__nfl_log2",
+ # "fl_plasma__ALL__nfl_log2",
+ # "fl_csf__ALL__ptau_log2",
+ # "fl_plasma__ALL__ptau_181_log2",
+ # "fl_plasma__ALL__abeta42_40_ratio_log2",
+ # "fl_plasma__ALL__ptau_217_log2",
+ # "fl_csf__ALL__abeta_40_log2",   
+ # "fl_plasma__ALL__abeta_40_log2",
+ # # "fl_csf__ALL__abeta_42_log2" ,   
+ # "fl_plasma__ALL__abeta_42_log2",
+ # "fl_csf__ALL__plgf_log2",
+#  "fl_plasma__ALL__plgf_log2" ,
+ "fl_csf__ALL__il_1b_log2" ,
+#  "fl_plasma__ALL__il_1b_log2",
+#  "fl_plasma__ALL__mmp_2_log2" ,
+#  "fl_plasma__ALL__mmp_1_log2",
+# "fl_plasma__ALL__mmp_3_log2" ,
+#  "fl_plasma__ALL__mmp_9_log2" ,
+#  "fl_plasma__ALL__mmp_10_log2",
+ "fl_csf__ALL__mmp_10_log2" 
+#  "fl_plasma__ALL__bfgf_log2",
+# "fl_plasma__ALL__flt_1_log2",
+#  "fl_plasma__ALL__tie2_log2" ,
+#  "fl_plasma__ALL__vegf_a_log2",
+#  "fl_plasma__ALL__vegf_c_log2",
+#  "fl_plasma__ALL__vegf_d_log2"
+
+)
+
+
+
+
+n_complete <- sum(complete.cases(dat_sheet[, c("mri_perm_3t_tot", biomarkers)]))
+print(n_complete) # Only one remained
+
+# sapply(some_biomarkers_vd, function(x) sum(!is.na(dat_sheet[[x]])))
+
+
+
+# 2. Build a formula: TripleDichotomy_VD ~ biomarker1 + biomarker2 + ...
+mri_form <- as.formula(
+  paste("mri_perm_3t_tot ~", paste(biomarkers, collapse = " + "))
+)
+
+# Fit main-effects model
+mri_main <- lm(mri_form, data = dat_sheet)
+
+summary(mri_main)
+
+
+# car::Anova(mod_main, type = 3)
+# # 
+# e_plot_lm_diagnostics(mod_main, sw_plot_set = "simple")
+# 
+# # Perform Shapiro-Wilk test on the residuals
+# shapiro_test <- shapiro.test(residuals(mod_main))
+
+
+## -- 2. Define the 'upper' and 'lower' scopes for stepwise selection
+#    Upper includes two-way interactions: (x1 + x2 + ...)^2
+#    Lower is just an intercept-only model: ~ 1
+
+fml_upper_mri <- as.formula(
+  paste("mri_perm_3t_tot ~ (", paste(biomarkers, collapse = " + "), ")^2")
+)
+fml_lower_mri <- as.formula("mri_perm_3t_tot ~ 1")
+
+## -- 3. Run stepwise selection
+model_selected_albumin <- step(
+  object  = mri_main,
+  scope   = list(lower = fml_lower_mri, upper = fml_upper_mri),
+  direction = "forward"
+)
+
+
+
+## -- 4. Inspect the final model
+summary(model_selected_albumin)
+
+
+pal_okabe <- c("#E69F00", "#56B4E9", "#009E73",
+               "#F0E442", "#0072B2", "#D55E00",
+               "#CC79A7", "#999999")
+
+# 1 Break-point data → nice tibble
+
+
+# turn your `log2_groups` list into a tidy frame
+break_df <- imap_dfr(log2_groups, ~{
+  tibble(
+    order         = .y,
+    n_cases       = .x$complete_cases,
+    added_vars    = setdiff(.x$variables[-1],
+                            if (.y == 1) character(0) else log2_groups[[.y-1]]$variables[-1])
+  )
+}) %>%
+  unnest_longer(added_vars, keep_empty = TRUE) %>%
+  mutate(added_vars = str_remove_all(added_vars,
+                                     "^fl_(plasma|csf)__ALL__|_log2$"))
+
+# 2 Figure 1: attrition curve
+break_plot <- ggplot(break_df,
+                     aes(x = order, y = n_cases)) +
+  geom_line(linewidth = .8, colour = pal_okabe[2]) +
+  geom_point(size = 2, colour  = pal_okabe[1]) +
+  geom_text(aes(label = added_vars),
+            hjust = -0.05, vjust = 0.5, size = 3,
+            family = "mono") +
+  scale_x_continuous(breaks = break_df$order) +
+  scale_y_continuous(labels = comma) +
+  labs(y = "complete cases",
+       x = "biomarker-addition step",
+       title = "Sample-size attrition as biomarkers are added") +
+  theme_minimal(base_size = 11) +
+  theme(panel.grid.minor = element_blank(),
+        axis.text.x = element_text(angle = 60, hjust = 1))
+
+# 3 Figure 2: improved RF-importance plot
+
+
+imp_plot <- ggplot(rf_results$importance, aes(x = reorder(variable, importance), y = importance)) +
+  geom_bar(stat = "identity", fill = "steelblue") +
+  coord_flip() +
+  theme_minimal() +
+  labs(
+    title = "Variable Importance in Random Forest Model",
+    x = "Variables",
+    y = "Importance (%IncMSE)"
+  )
+
+# 4 Figure 3: coefficient plot with model stats in the strip
+# tidy & label the final model  (albumin example shown)
+coef_df <- tidy(model_selected_albumin, conf.int = TRUE) %>% 
+  filter(term != "(Intercept)") %>%                # ← NEW: remove intercept
+  mutate(
+    term    = str_remove_all(term, "^fl_(plasma|csf)__ALL__|_log2$"),
+    term    = if_else(str_detect(term, ":"),         # italicise interactions
+                      paste0("*", term, "*"), term),
+    t_stat  = abs(statistic)                         # keep the t-value for plot 4
+  )
+
+model_stats <- glance(model_selected_albumin)
+
+coef_plot <- ggplot(coef_df,
+                    aes(y = fct_reorder(term, estimate),
+                        x = estimate)) +
+  geom_point(size = 2, colour = pal_okabe[5]) +
+  geom_errorbarh(aes(xmin = conf.low, xmax = conf.high),
+                 height = 0.15, colour = pal_okabe[5]) +
+  geom_vline(xintercept = 0, linetype = "dashed") +
+  labs(y = NULL, x = "β  (95 % CI)",
+       title = glue("Linear model – Albumin (R² {round(model_stats$r.squared,3)}, n = {model_stats$nobs})")) +
+  theme_minimal(base_size = 11)
+
+# t-stat bar 
+
+# Option 4: Combined plot with effect size context
+t_plot <- coef_df %>%
+  mutate(
+    sig_level = case_when(
+      p.value < 0.001 ~ "***",
+      p.value < 0.01  ~ "**",
+      p.value < 0.05  ~ "*",
+      p.value < 0.1   ~ ".",
+      TRUE ~ ""
+    ),
+    sig_color = case_when(
+      p.value < 0.05 ~ "Significant",
+      p.value < 0.1  ~ "Marginal",
+      TRUE ~ "Not significant"
+    )
+  ) %>%
+  ggplot(aes(y = fct_reorder(term, estimate),
+             x = statistic)) +
+  geom_col(aes(fill = sig_color)) +
+  geom_text(aes(label = sig_level, 
+                x = statistic + sign(statistic) * 0.3),
+            size = 4, vjust = 0.5) +
+  scale_fill_manual(values = c("Significant" = "#009E73",
+                               "Marginal" = "#F0E442",
+                               "Not significant" = "#999999"),
+                    name = "Significance") +
+  geom_vline(xintercept = 0, linetype = "solid") +
+  labs(y = NULL, x = "t-statistic",
+       title = "T-statistics with significance levels",
+       subtitle = "*** p<0.001, ** p<0.01, * p<0.05, . p<0.1") +
+  theme_minimal(base_size = 11) +
+  theme(legend.position = "bottom")
+
+# 5 Table 1: breakpoint narrative
+
+tbl_breaks <- break_df %>%
+  group_by(order) %>%
+  summarise(`complete cases` = first(n_cases),
+            `added biomarkers` = paste(added_vars, collapse = ", ")) %>%
+  mutate(step = row_number()) %>%
+  select(step, everything()) %>%
+  gt() %>%
+  tab_header(title = md("**Sample-size breakpoints**")) %>%
+  fmt_number(columns = `complete cases`, sep_mark = ",") %>%
+  tab_style(cell_borders(sides = "top", weight = px(1)),
+            locations = cells_body(rows = 1)) %>%
+  opt_row_striping()
+
+# 6 Table 2: model performance
+tbl_perf <- tibble(
+  outcome = "Albumin index",
+  adj_R2  = round(model_stats$r.squared, 3),
+  RMSE    = round(model_stats$sigma, 3),
+  n       = model_stats$nobs
+) %>%
+  gt() %>%
+  tab_header(title = md("**Final model performance**"))
+
+# 7 Arrange and save / display
+
+
+# side-by-side figures, adjust widths to taste
+(break_plot | imp_plot | coef_plot | t_plot) +
+  plot_layout(widths = c(1.2, 1, 1, 0.9))   # tweak widths as you like
+
+# save
+ggsave("mri_analys_onlycsf_overview.png", width = 17, height = 4, dpi = 300)
+
+# view tables in the Viewer or knit to Quarto
+tbl_breaks
+tbl_perf
+
+```
+
+Running mri3t \~ plasma_csf …
+
+```{r}
+
+
+# Get only plasma biomarkers ending in _log2
+# find_optimal_log2_groups <- function(data, min_cases = 30) {
+#   # Get only plasma markers ending in _log2
+#   plasma_csf_markers <- grep("^fl_(plasma|csf).*_log2$", names(data), value = TRUE)
+#    
+#   # Start with outcome variable
+#   current_vars <- c("mri_perm_3t_tot")
+#   results <- list()
+#   
+#   for(marker in plasma_csf_markers) {
+#     temp_vars <- c(current_vars, marker)
+#     complete_cases <- sum(complete.cases(data[, temp_vars]))
+#     
+#     if(complete_cases >= min_cases) {
+#       current_vars <- temp_vars
+#       results[[length(results) + 1]] <- list(
+#         variables = current_vars,
+#         complete_cases = complete_cases
+#       )
+#     }
+#   }
+#   return(results)
+# }
+# 
+# # Apply the function
+# log2_groups <- find_optimal_log2_groups(dat_sub)
+# 
+# # Print summary of available biomarkers and sample sizes
+# for(i in seq_along(log2_groups)) {
+#   cat("\nGroup", i, ":\n")
+#   cat("Variables:", paste(log2_groups[[i]]$variables[-1], collapse = ", "), "\n")
+#   cat("Complete cases:", log2_groups[[i]]$complete_cases, "\n")
+# }
+# 
+# # Get the final set of all log2 biomarkers
+# final_log2_vars <- log2_groups[[length(log2_groups)]]$variables
+# 
+# # Print final number of biomarkers and sample size
+# cat("\nFinal model will include:", length(final_log2_vars)-1, "biomarkers\n")
+# cat("With sample size:", log2_groups[[length(log2_groups)]]$complete_cases, "\n")
+# 
+# # Function to print breakpoint summary
+# summarize_breakpoints <- function(groups) {
+#   prev_vars <- NULL
+#   prev_n <- NULL
+#   
+#   cat("Sample Size Breakpoints:\n")
+#   
+#   for(i in seq_along(groups)) {
+#     current_vars <- groups[[i]]$variables[-1]  # exclude outcome variable
+#     current_n <- groups[[i]]$complete_cases
+#     
+#     if(is.null(prev_n) || current_n != prev_n) {
+#       new_vars <- if(is.null(prev_vars)) {
+#         current_vars
+#       } else {
+#         setdiff(current_vars, prev_vars)
+#       }
+#       
+#       # Separate CSF and plasma variables
+#       csf_vars <- grep("csf", new_vars, value = TRUE)
+#       plasma_vars <- grep("plasma", new_vars, value = TRUE)
+#       
+#       # Clean up variable names for display but keep CSF/Plasma indicator
+#       clean_vars <- gsub("^fl_(plasma|csf)__ALL__", "\\1: ", new_vars)
+#       clean_vars <- gsub("^fl_csf_", "csf: ", clean_vars)
+#       clean_vars <- gsub("^fl_plasma_", "plasma: ", clean_vars)
+#       clean_vars <- gsub("_log2", "", clean_vars)
+#       
+#       cat(sprintf("%d cases: %s\n", 
+#                   current_n,
+#                   if(i == 1) {
+#                     sprintf("starting with %s", paste(clean_vars, collapse = " and "))
+#                   } else {
+#                     sprintf("adding %s", paste(clean_vars, collapse = " and "))
+#                   }))
+#       
+#       prev_vars <- current_vars
+#       prev_n <- current_n
+#     }
+#   }
+# }
+# 
+# # Apply the function to your groups
+# summarize_breakpoints(log2_groups)
+# 
+# # Also show the complete list of final variables
+# cat("\nFinal set of biomarkers:\n")
+# 
+# # Separate CSF and plasma for final display
+# final_vars <- log2_groups[[length(log2_groups)]]$variables[-1]
+# csf_vars <- grep("csf", final_vars, value = TRUE)
+# plasma_vars <- grep("plasma", final_vars, value = TRUE)
+# 
+# cat("\nCSF biomarkers (", length(csf_vars), "):\n", sep = "")
+# csf_clean <- gsub("^fl_(csf)__ALL__", "", csf_vars)
+# csf_clean <- gsub("^fl_csf_", "", csf_clean)
+# csf_clean <- gsub("_log2", "", csf_clean)
+# cat(paste(csf_clean, collapse = "\n"))
+# 
+# cat("\n\nPlasma biomarkers (", length(plasma_vars), "):\n", sep = "")
+# plasma_clean <- gsub("^fl_(plasma)__ALL__", "", plasma_vars)
+# plasma_clean <- gsub("^fl_plasma_", "", plasma_clean)
+# plasma_clean <- gsub("_log2", "", plasma_clean)
+# cat(paste(plasma_clean, collapse = "\n"))
+# 
+
+dat_sub|> dplyr::select(-fl_csf_igg_log2) -> dat_sub_without_igg
+
+csf_plasma_mri_markers <- dat_sub_without_igg |>
+  select(
+    contains("csf"),
+    contains("plasma"),
+    mri_perm_3t_tot
+  ) %>%
+  names()
+result <- e_data_complete_by_variable_subset(dat_sub_without_igg, var_list = csf_plasma_mri_markers, var_resp = "mri_perm_3t_tot")
+# See all variable names for each row
+result$var_names[2]
+
+
+
+# Apply RandomForest to check the important varibels for mri index with 35 cases both plasma and csf
+
+# [[1]]
+# [1] "mri_perm_3t_tot"            "fl_msd_csf_mmp_1_log2"      "fl_msd_csf_mmp_3_log2"      "fl_msd_csf_mmp_9_log2"      "fl_plasma__ALL__mmp_1_log2" "fl_plasma__ALL__mmp_3_log2" "fl_plasma__ALL__mmp_9_log2"
+# 60
+
+ biomarkers<- c(
+ # "fl_csf_glucose_log2",
+ # "fl_csf_total_protein_log2",
+ # "fl_csf_rbc_log2",
+ # "fl_csf_tnc_log2",
+ # "fl_csf_igg_log2",
+ # "fl_csf_albumin_log2",           
+ # "fl_csf_igg_synthesis_log2",     
+ # "fl_abeta_38_log2",
+ # "fl_csf__ALL__gfap_log2",
+ # "fl_plasma__ALL__gfap_log2",    
+ # "fl_csf__ALL__nfl_log2",
+ # "fl_plasma__ALL__nfl_log2",
+ # "fl_csf__ALL__ptau_log2",
+ # "fl_plasma__ALL__ptau_181_log2",
+ # "fl_plasma__ALL__abeta42_40_ratio_log2",
+ # "fl_plasma__ALL__ptau_217_log2",
+ # "fl_csf__ALL__abeta_40_log2",   
+ # "fl_plasma__ALL__abeta_40_log2",
+ # # "fl_csf__ALL__abeta_42_log2" ,   
+ # "fl_plasma__ALL__abeta_42_log2",
+ # "fl_csf__ALL__plgf_log2",
+ # "fl_plasma__ALL__plgf_log2" ,
+ # "fl_csf__ALL__il_1b_log2" ,
+ # "fl_plasma__ALL__il_1b_log2",
+ # "fl_plasma__ALL__mmp_2_log2" ,
+ "fl_plasma__ALL__mmp_1_log2",
+"fl_plasma__ALL__mmp_3_log2" ,
+ "fl_plasma__ALL__mmp_9_log2" ,
+"fl_msd_csf_mmp_1_log2",
+"fl_msd_csf_mmp_3_log2",
+"fl_msd_csf_mmp_9_log2"
+#  "fl_plasma__ALL__mmp_10_log2",
+ # "fl_csf__ALL__mmp_10_log2" 
+#  "fl_plasma__ALL__bfgf_log2",
+# "fl_plasma__ALL__flt_1_log2",
+#  "fl_plasma__ALL__tie2_log2" 
+ # "fl_plasma__ALL__vegf_a_log2",
+ # "fl_plasma__ALL__vegf_c_log2",
+ # "fl_plasma__ALL__vegf_d_log2"
+
+)
+
+
+
+
+library(randomForest)
+library(caret)
+library(ggplot2)
+
+# Function to run Random Forest analysis
+run_rf_analysis <- function(data, outcome_var, predictors, n_trees = 500) {
+  # Prepare data
+  model_data <- na.omit(data[, c(outcome_var, predictors)])
+  
+  # Create formula
+  rf_formula <- as.formula(paste(outcome_var, "~", paste(predictors, collapse = " + ")))
+  
+  # Run Random Forest
+  set.seed(123)  # for reproducibility
+  rf_model <- randomForest(
+    formula = rf_formula,
+    data = model_data,
+    ntree = n_trees,
+    importance = TRUE
+  )
+
+    # Get variable importance
+  var_imp <- importance(rf_model)
+  var_imp_df <- data.frame(
+  variable = rownames(var_imp),  # CHANGE: Keep original names
+  variable_clean = gsub("^fl_(plasma|csf)__ALL__", "", gsub("_log2", "", rownames(var_imp))), # For display
+  importance = var_imp[, "%IncMSE"],
+  stringsAsFactors = FALSE
+   )
+  var_imp_df <- var_imp_df[order(-var_imp_df$importance), ]
+  
+  # Calculate model performance
+  predictions <- predict(rf_model) #If no new data is provided, it predicts for the training data.
+  rmse <- sqrt(mean((model_data[[outcome_var]] - predictions)^2))
+  r2 <- 1 - sum((model_data[[outcome_var]] - predictions)^2) / 
+            sum((model_data[[outcome_var]] - mean(model_data[[outcome_var]]))^2)
+  
+  return(list(
+    model = rf_model,
+    importance = var_imp_df,
+    performance = list(
+      rmse = rmse,
+      r2 = r2,
+      n_obs = nrow(model_data)
+    )
+  ))
+}
+
+# Run Random Forest analysis
+rf_results <- run_rf_analysis(
+  data = dat_sub_without_igg,
+  outcome_var = "mri_perm_3t_tot",
+  predictors = biomarkers
+)
+
+# Print results
+cat("\nRandom Forest Model Performance:\n")
+cat("R-squared:", round(rf_results$performance$r2, 3), "\n")
+cat("RMSE:", round(rf_results$performance$rmse, 3), "\n")
+cat("Number of observations:", rf_results$performance$n_obs, "\n")
+
+# Print variable importance
+cat("\nVariable Importance (top 10):\n")
+print(head(rf_results$importance, 10))
+
+# Plot variable importance
+ggplot(rf_results$importance, aes(x = reorder(variable, importance), y = importance)) +
+  geom_bar(stat = "identity", fill = "steelblue") +
+  coord_flip() +
+  theme_minimal() +
+  labs(
+    title = "Variable Importance in Random Forest Model",
+    x = "Variables",
+    y = "Importance (%IncMSE)"
+  )
+
+# Function to create models with top N variables
+create_top_n_model <- function(data, outcome_var, importance_df, n_vars) {
+  top_vars <- top_vars <- importance_df$variable[1:n_vars]
+
+  
+  # Create formula with interactions
+  formula <- as.formula(paste(outcome_var, "~", 
+                            paste(top_vars, collapse = " + ")))
+  
+  # Fit model
+  model_data <- na.omit(data[, c(outcome_var, top_vars)])
+  model <- lm(formula, data = model_data)
+
+    fml_upper <- as.formula(
+  paste(outcome_var, "~ (", paste(top_vars, collapse = " + "), ")^2")
+)
+ 
+     fml_lower <- as.formula("outcome_var ~ 1")
+  
+  # 6. Perform stepwise selection
+
+     model_selected <- step(
+  object  = model,
+  scope   = list(lower = fml_lower, upper = fml_upper),
+  direction = "both",
+  trace = 0  # Suppress stepwise output
+)
+
+  return(model_selected)
+}
+
+# Create models with top 4 variables
+top5_model <- create_top_n_model(
+  data = dat_sub_without_igg,
+  outcome_var = "mri_perm_3t_tot",
+  importance_df = rf_results$importance,
+  n_vars = 5
+)
+
+# Print results of top 4 model
+cat("\nModel with top 5 variables from Random Forest:\n")
+summary(top5_model)
+
+
+# Now base on the result of Random-forest we create new albumin
+
+
+
+library(dplyr)
+
+# 1. Extract columns that start with either "fl_plasma_" or "fl_csf_"
+# biomarker_cols <- dat_all_combine %>%
+#   dplyr::select(matches("^(fl_plasma_|fl_csf_|fl_simoa_|fl_msd_|fl_abeta_).*log2$")) %>%
+#   names()
+
+
+# 
+# biomarker_cols <- dat_all_combine_AD_VD %>%
+#   dplyr::select(matches("^(fl_plasma_|fl_csf_|fl_abeta_38).*log2$")) %>%
+#   names()
+# 
+# biomarker_cols_final <- biomarker_cols[ !grepl("original", biomarker_cols) ]
+# 
+# # Number of complete rows for the variables of interest:
+# # n_complete <- sum(complete.cases(dat_all_combine[, c("TripleDichotomy_VD_log2", biomarker_cols)]))
+# # print(n_complete) # Only one remained
+# 
+# # how many rows remain for each biomarker individually:
+# sapply(biomarker_cols, function(x) sum(!is.na(dat_all_combine_AD_VD[[x]])))
+# 
+# e_data_complete_by_variable_subset(dat_all_combine_AD_VD, var_list = c(some_biomarkers_vd, "fl_albumin_index_log2"), var_resp = "fl_albumin_index_log2")
+ 
+# if you choose this you will get lots of interaction but Rsquare still low around 40%
+# 5 Important varibels base on the result of RF IMportance
+biomarkers<- c(
+ # "fl_csf_glucose_log2",
+ # "fl_csf_total_protein_log2",
+ # "fl_csf_rbc_log2",
+ # "fl_csf_tnc_log2",
+ "fl_csf_igg_log2",
+ # "fl_csf_albumin_log2",           
+ # "fl_csf_igg_synthesis_log2",     
+ # "fl_abeta_38_log2",
+ "fl_csf__ALL__gfap_log2",
+ # "fl_plasma__ALL__gfap_log2",    
+ "fl_csf__ALL__nfl_log2",
+ # "fl_plasma__ALL__nfl_log2",
+ # "fl_csf__ALL__ptau_log2",        
+ # "fl_plasma__ALL__ptau_181_log2",
+ # "fl_plasma__ALL__abeta42_40_ratio_log2",
+ # "fl_plasma__ALL__ptau_217_log2",
+ # "fl_csf__ALL__abeta_40_log2",   
+ # "fl_plasma__ALL__abeta_40_log2",
+ # # "fl_csf__ALL__abeta_42_log2" ,   
+ # "fl_plasma__ALL__abeta_42_log2",
+ "fl_csf__ALL__plgf_log2",
+ # "fl_plasma__ALL__plgf_log2" ,
+ "fl_csf__ALL__il_1b_log2" ,
+ # "fl_plasma__ALL__il_1b_log2",
+ "fl_plasma__ALL__mmp_2_log2" ,
+ # "fl_plasma__ALL__mmp_1_log2",
+# "fl_plasma__ALL__mmp_3_log2" ,
+ # "fl_plasma__ALL__mmp_9_log2" ,
+ # "fl_plasma__ALL__mmp_10_log2",
+ "fl_csf__ALL__mmp_10_log2" 
+ # "fl_plasma__ALL__bfgf_log2",
+# "fl_plasma__ALL__flt_1_log2",
+#  "fl_plasma__ALL__tie2_log2" 
+ # "fl_plasma__ALL__vegf_a_log2",
+ # "fl_plasma__ALL__vegf_c_log2"
+ # "fl_plasma__ALL__vegf_d_log2"
+
+)
+
+
+
+
+n_complete <- sum(complete.cases(dat_sheet[, c("mri_perm_3t_tot", biomarkers)]))
+print(n_complete) # Only one remained
+
+# sapply(some_biomarkers_vd, function(x) sum(!is.na(dat_sheet[[x]])))
+
+
+
+# 2. Build a formula: TripleDichotomy_VD ~ biomarker1 + biomarker2 + ...
+mri_form <- as.formula(
+  paste("mri_perm_3t_tot ~", paste(biomarkers, collapse = " + "))
+)
+
+# Fit main-effects model
+mri_main <- lm(mri_form, data = dat_sheet)
+
+summary(mri_main)
+
+
+# car::Anova(mod_main, type = 3)
+# # 
+# e_plot_lm_diagnostics(mod_main, sw_plot_set = "simple")
+# 
+# # Perform Shapiro-Wilk test on the residuals
+# shapiro_test <- shapiro.test(residuals(mod_main))
+
+
+## -- 2. Define the 'upper' and 'lower' scopes for stepwise selection
+#    Upper includes two-way interactions: (x1 + x2 + ...)^2
+#    Lower is just an intercept-only model: ~ 1
+
+fml_upper_mri <- as.formula(
+  paste("mri_perm_3t_tot ~ (", paste(biomarkers, collapse = " + "), ")^2")
+)
+fml_lower_mri <- as.formula("mri_perm_3t_tot ~ 1")
+
+## -- 3. Run stepwise selection
+model_selected_albumin <- step(
+  object  = mri_main,
+  scope   = list(lower = fml_lower_mri, upper = fml_upper_mri),
+  direction = "forward"
+)
+
+
+
+## -- 4. Inspect the final model
+summary(model_selected_albumin)
+
+
+
+pal_okabe <- c("#E69F00", "#56B4E9", "#009E73",
+               "#F0E442", "#0072B2", "#D55E00",
+               "#CC79A7", "#999999")
+
+# 1 Break-point data → nice tibble
+
+
+# turn your `log2_groups` list into a tidy frame
+break_df <- imap_dfr(log2_groups, ~{
+  tibble(
+    order         = .y,
+    n_cases       = .x$complete_cases,
+    added_vars    = setdiff(.x$variables[-1],
+                            if (.y == 1) character(0) else log2_groups[[.y-1]]$variables[-1])
+  )
+}) %>%
+  unnest_longer(added_vars, keep_empty = TRUE) %>%
+  mutate(added_vars = str_remove_all(added_vars,
+                                     "^fl_(plasma|csf)__ALL__|_log2$"))
+
+# 2 Figure 1: attrition curve
+break_plot <- ggplot(break_df,
+                     aes(x = order, y = n_cases)) +
+  geom_line(linewidth = .8, colour = pal_okabe[2]) +
+  geom_point(size = 2, colour  = pal_okabe[1]) +
+  geom_text(aes(label = added_vars),
+            hjust = -0.05, vjust = 0.5, size = 3,
+            family = "mono") +
+  scale_x_continuous(breaks = break_df$order) +
+  scale_y_continuous(labels = comma) +
+  labs(y = "complete cases",
+       x = "biomarker-addition step",
+       title = "Sample-size attrition as biomarkers are added") +
+  theme_minimal(base_size = 11) +
+  theme(panel.grid.minor = element_blank(),
+        axis.text.x = element_text(angle = 60, hjust = 1))
+
+# 3 Figure 2: improved RF-importance plot
+
+
+imp_plot <- ggplot(rf_results$importance, aes(x = reorder(variable, importance), y = importance)) +
+  geom_bar(stat = "identity", fill = "steelblue") +
+  coord_flip() +
+  theme_minimal() +
+  labs(
+    title = "Variable Importance in Random Forest Model",
+    x = "Variables",
+    y = "Importance (%IncMSE)"
+  )
+
+# 4 Figure 3: coefficient plot with model stats in the strip
+# tidy & label the final model  (albumin example shown)
+coef_df <- tidy(model_selected_albumin, conf.int = TRUE) %>% 
+  filter(term != "(Intercept)") %>%                # ← NEW: remove intercept
+  mutate(
+    term    = str_remove_all(term, "^fl_(plasma|csf)__ALL__|_log2$"),
+    term    = if_else(str_detect(term, ":"),         # italicise interactions
+                      paste0("*", term, "*"), term),
+    t_stat  = abs(statistic)                         # keep the t-value for plot 4
+  )
+
+model_stats <- glance(model_selected_albumin)
+
+coef_plot <- ggplot(coef_df,
+                    aes(y = fct_reorder(term, estimate),
+                        x = estimate)) +
+  geom_point(size = 2, colour = pal_okabe[5]) +
+  geom_errorbarh(aes(xmin = conf.low, xmax = conf.high),
+                 height = 0.15, colour = pal_okabe[5]) +
+  geom_vline(xintercept = 0, linetype = "dashed") +
+  labs(y = NULL, x = "β  (95 % CI)",
+       title = glue("Linear model – Albumin (R² {round(model_stats$r.squared,3)}, n = {model_stats$nobs})")) +
+  theme_minimal(base_size = 11)
+
+# t-stat bar 
+
+# Option 4: Combined plot with effect size context
+t_plot <- coef_df %>%
+  mutate(
+    sig_level = case_when(
+      p.value < 0.001 ~ "***",
+      p.value < 0.01  ~ "**",
+      p.value < 0.05  ~ "*",
+      p.value < 0.1   ~ ".",
+      TRUE ~ ""
+    ),
+    sig_color = case_when(
+      p.value < 0.05 ~ "Significant",
+      p.value < 0.1  ~ "Marginal",
+      TRUE ~ "Not significant"
+    )
+  ) %>%
+  ggplot(aes(y = fct_reorder(term, estimate),
+             x = statistic)) +
+  geom_col(aes(fill = sig_color)) +
+  geom_text(aes(label = sig_level, 
+                x = statistic + sign(statistic) * 0.3),
+            size = 4, vjust = 0.5) +
+  scale_fill_manual(values = c("Significant" = "#009E73",
+                               "Marginal" = "#F0E442",
+                               "Not significant" = "#999999"),
+                    name = "Significance") +
+  geom_vline(xintercept = 0, linetype = "solid") +
+  labs(y = NULL, x = "t-statistic",
+       title = "T-statistics with significance levels",
+       subtitle = "*** p<0.001, ** p<0.01, * p<0.05, . p<0.1") +
+  theme_minimal(base_size = 11) +
+  theme(legend.position = "bottom")
+
+# 5 Table 1: breakpoint narrative
+
+tbl_breaks <- break_df %>%
+  group_by(order) %>%
+  summarise(`complete cases` = first(n_cases),
+            `added biomarkers` = paste(added_vars, collapse = ", ")) %>%
+  mutate(step = row_number()) %>%
+  select(step, everything()) %>%
+  gt() %>%
+  tab_header(title = md("**Sample-size breakpoints**")) %>%
+  fmt_number(columns = `complete cases`, sep_mark = ",") %>%
+  tab_style(cell_borders(sides = "top", weight = px(1)),
+            locations = cells_body(rows = 1)) %>%
+  opt_row_striping()
+
+# 6 Table 2: model performance
+tbl_perf <- tibble(
+  outcome = "Albumin index",
+  adj_R2  = round(model_stats$r.squared, 3),
+  RMSE    = round(model_stats$sigma, 3),
+  n       = model_stats$nobs
+) %>%
+  gt() %>%
+  tab_header(title = md("**Final model performance**"))
+
+# 7 Arrange and save / display
+
+
+# side-by-side figures, adjust widths to taste
+(break_plot | imp_plot | coef_plot | t_plot) +
+  plot_layout(widths = c(1.2, 1, 1, 0.9))   # tweak widths as you like
+# save
+ggsave("mri_analys_csfplasma_overview.png", width = 17, height = 4, dpi = 300)
+
+# view tables in the Viewer or knit to Quarto
+tbl_breaks
+tbl_perf
+
+
+```
+
+# 4/30/25 Arvind, try classification instead of inference for albumin index
+
+how? Find a cut point for Albumin Index for positive/negative from literature (maybe 5.0 or 5.5) If can't find, then plot by DX. Use the 95th-percentile of Controls as an upper bound cut-off. Above cut-off is positive. Predict positive/negative using fluid biomarkers RF Logistic regression Assess ROC Curve Note: I am using the dat_all_combine without alignment
+
+```{r}
+library(gridExtra) 
+# library(grid.text )# for grid.arrange()
+library(grid)        # for textGrob(), gpar()
+library(randomForest)
+
+# Define the baseline visit categories
+baseline_visits <- c(
+  "Baseline (Arm 1: Patients)",
+  "Baseline (Arm 2: Control)",
+  "Baseline (Arm 3: CSF controls)",
+  "Baseline (Arm 4: Diabetes)",
+  "baseline"
+)
+
+# Filter dataset based on baseline visits
+dat_baseline_AD_VD <- dat_all_combine |>
+  filter(redcap_event_name %in% baseline_visits) |>  # Keep only baseline visits
+  mutate(
+    TripleDichotomy_VD = mri_dti_psmd_z,
+    TripleDichotomy_VD_log2 = e_log_shift(TripleDichotomy_VD),
+    TripleDichotomy_AD = (fl_csf__ALL__ptau / fl_csf__ALL__abeta_42),
+    TripleDichotomy_AD_log2 = log2(TripleDichotomy_AD),
+    fl_plasma__ALL__abeta42_40_ratio_log2 = log2(fl_plasma__ALL__abeta_42/fl_plasma__ALL__abeta_40)
+  )
+
+# find cut point base on 95th-percentile of Controls
+cut_75 <- quantile (dat_baseline_AD_VD$fl_albumin_index_log2
+                                      [dat_baseline_AD_VD$dx_biological == "LA"], probs = 0.75,
+                                      na.rm = TRUE) 
+
+# create a factor base on the 95th-percentile of Controls which is coming from the cut_95
+
+# dat_baseline_AD_VD <- dat_baseline_AD_VD |> mutate(
+#   
+#     AlbuminIndex_status= if_else (fl_albumin_index > cut_95, 1,0), # 1 = Positive
+#     AlbuminIndex_status= factor(AlbuminIndex_status, levels=c(0,1))
+# )
+# table(dat_all_combine_AD_VD$AlbuminIndex_status)
+# 
+#   0   1 
+# 276   8 
+
+
+## --- 2. quick plot by diagnosis --------------------------------
+# ggplot(dat_baseline_AD_VD, aes(x = dx_biological, y = fl_albumin_index)) +
+#   geom_boxplot(outlier.shape = NA, fill = "grey90") +
+#   geom_jitter(width = 0.25, alpha = 0.3) +
+#   geom_hline(yintercept = cut_point_95thpercentile, colour = "red", linetype = 2, linewidth = 1) +
+#   labs(title = "Albumin Index by dx_biological (baseline)",
+#        y = "Albumin Index", x = "Diagnosis group") +
+#   theme_bw() +
+#   theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+
+# It is really an unbalanced result, I also use cut point from literture
+
+lit9_log2  <- log2(  9    )  # literature cut-point 9
+lit10.2_l2 <- log2( 10.2    )  # literature 10.2
+lit5.5_l2  <- log2(  5.5     )  # literature 5.5
+
+
+cut_pts <- tibble(
+  cutoff = c(cut_75, lit9_log2, lit10.2_l2, lit5.5_l2),
+  label  = c("75th % LA", "Literature 9", "Literature 10.2", "Literature 5.5")
+)
+
+## ------------------------------------------------------------------ 
+## 3. (optional) add a status column for EACH cut‑point -------------
+dat_baseline_AD_VD <- dat_baseline_AD_VD %>%
+  mutate(
+    AlbumIdx_pos_75      = factor(if_else(fl_albumin_index_log2 > cut_75, 1, 0),
+                                  levels = c(0, 1)),
+    AlbumIdx_pos_9       = factor(if_else(fl_albumin_index_log2 > lit9_log2,  1, 0),
+                                  levels = c(0, 1)),
+    AlbumIdx_pos_10_2    = factor(if_else(fl_albumin_index_log2 > lit10.2_l2, 1, 0),
+                                  levels = c(0, 1)),
+    AlbumIdx_pos_5_5     = factor(if_else(fl_albumin_index_log2 > lit5.5_l2, 1, 0),
+                                  levels = c(0, 1))
+  )
+
+## ------------------------------------------------------------------ 
+## 4. plot with one horizontal line per cut‑point -------------------
+ggplot(dat_baseline_AD_VD,
+       aes(x = dx_biological, y = fl_albumin_index_log2)) +
+  geom_boxplot(outlier.shape = NA, fill = "grey90") +
+  geom_jitter(width = 0.25, alpha = 0.3, size = 1) +
+  geom_hline(data = cut_pts,
+             aes(yintercept = cutoff, colour = label),
+             linetype = "dashed", linewidth = 1) +
+  scale_colour_manual(values = c("red", "blue", "darkgreen", "purple"),
+                      name   = "Cut‑points") +
+  labs(title = "Albumin Index by dx_biological (baseline)",
+       y = "Albumin Index", x = "Diagnosis group") +
+  theme_bw() +
+  theme(axis.text.x  = element_text(angle = 45, hjust = 1),
+        legend.title = element_text(size = 10),
+        legend.text  = element_text(size = 9))
+
+
+# 
+# # ------------ 2. biomarker list --------------------------------------------
+# some_biomarkers_albumin <- c(
+#  "fl_csf_glucose_log2",
+#  "fl_csf_total_protein_log2",
+#  "fl_csf_rbc_log2",
+#  "fl_csf_tnc_log2",
+#  "fl_csf_igg_log2",
+#  # "fl_csf_albumin_log2",
+#  "fl_csf_igg_synthesis_log2",
+#  "fl_abeta_38_log2",
+#  "fl_csf__ALL__gfap_log2",
+#  "fl_plasma__ALL__gfap_log2",
+#  "fl_csf__ALL__nfl_log2",
+#  "fl_plasma__ALL__nfl_log2",
+#  "fl_csf__ALL__ptau_log2",
+#  "fl_plasma__ALL__ptau_181_log2",
+#  "fl_plasma__ALL__abeta42_40_ratio_log2",
+#  "fl_plasma__ALL__ptau_217_log2",
+#  "fl_csf__ALL__abeta_40_log2",
+#  "fl_plasma__ALL__abeta_40_log2",
+#  "fl_csf__ALL__abeta_42_log2" ,
+#  "fl_plasma__ALL__abeta_42_log2",
+#  "fl_csf__ALL__plgf_log2",
+#  "fl_plasma__ALL__plgf_log2" ,
+#  "fl_csf__ALL__il_1b_log2" ,
+#  "fl_plasma__ALL__il_1b_log2",
+#  "fl_plasma__ALL__mmp_2_log2" ,
+#  "fl_plasma__ALL__mmp_1_log2",
+# "fl_plasma__ALL__mmp_3_log2" ,
+#  "fl_plasma__ALL__mmp_9_log2" ,
+#  "fl_plasma__ALL__mmp_10_log2",
+#  "fl_csf__ALL__mmp_10_log2" ,
+#  "fl_plasma__ALL__bfgf_log2",
+# "fl_plasma__ALL__flt_1_log2",
+#  "fl_plasma__ALL__tie2_log2" ,
+#  "fl_plasma__ALL__vegf_a_log2",
+#  "fl_plasma__ALL__vegf_c_log2",
+#  "fl_plasma__ALL__vegf_d_log2"
+# )
+# 
+# 
+# 
+# 
+# 
+# e_data_complete_by_variable_subset(dat_baseline_AD_VD, var_list = c(some_biomarkers_albumin, "fl_albumin_index_log2"), var_resp = "fl_albumin_index_log2")
+# 
+# ## 3. Jack-knife CV helper for single-predictor GLM -------------------
+# jackknife_roc_cv <- function(data, outcome_var, predictor_var) {
+#   # data = dat_i
+#   # outcome_var = "AlbuminIndex_status"
+#   # predictor_var =  bm
+#   n <- nrow(data)
+#   labels <- integer(n)
+#   probs  <- numeric(n)
+#   for (i in seq_len(n)) {
+#     # i=1
+#     train <- data[-i, ]
+#     test  <- data[i, , drop=FALSE]
+#     fit   <- glm(
+#       formula(paste(outcome_var, "~", predictor_var)),
+#       data = train, family = binomial
+#     )
+#     labels[i] <- as.numeric(as.character(data[[outcome_var]][i]))
+#     probs[i]  <- predict(fit, newdata = test, type = "response")
+#   }
+#   list(true = labels, pred = probs)
+# }
+# 
+# library(patchwork)   # wrap_plots() + plot_annotation()
+# 
+# # ───────────────────────────────
+# # 1.  helpers ---------------------------------------------------------
+# # ───────────────────────────────
+# # Create the binary outcome for a single cut‑point
+# add_status <- function(data, cut) {
+#   data %>% 
+#     mutate(
+#       # status = factor(if_else(fl_albumin_index_log2 > cut, 1, 0),
+#       #                 levels = c(0, 1))
+#        status = if_else(fl_albumin_index_log2 > cut, 1, 0)
+#     )
+# }
+# 
+# # Build one ROC plot for one biomarker
+# make_roc_plot <- function(df, biomarker) {
+#   tmp <- df %>% select(status, all_of(biomarker)) %>% drop_na()
+# 
+#   jk  <- jackknife_roc_cv(data= tmp, 
+#                           outcome_var = "status",                              predictor_var = biomarker)
+# 
+#   e_plot_roc(
+#     labels_true     = jk$true,
+#     pred_values_pos = jk$pred,
+#     label_neg_pos   = c(0, 1),
+#     sw_plot         = TRUE,
+#     sw_caption_desc = FALSE
+#   )$plot_roc +
+#     ggtitle(biomarker) +
+#     theme_minimal(base_size = 14) +
+#     theme(
+#       plot.title  = element_text(size = 16, face = "bold"),
+#       axis.title  = element_text(size = 14),
+#       axis.text   = element_text(size = 12),
+#       legend.text = element_text(size = 12)
+#     )
+# }
+# 
+# # Split any vector into chunks of size n
+# chunk <- function(x, n) split(x, ceiling(seq_along(x) / n))
+# 
+# # ───────────────────────────────
+# # 2.  main pipeline ---------------------------------------------------
+# # ───────────────────────────────
+# plots_per_page <- 4   # change to 6 for 3×2 pages, etc.
+# 
+# pdf("Albumin_ROCs_by_cutpoint.pdf", onefile = TRUE, width = 20, height = 20)
+# 
+# cut_pts %>% 
+#   mutate(data  = map(cutoff, ~add_status(dat_baseline_AD_VD, .x))) %>%  # add ‘status’
+#   mutate(plots = map(data,  ~map(some_biomarkers_albumin, make_roc_plot, df = .x))) %>% 
+#   pwalk(function(label, plots, ...) {                       # one “cut‑point” at a time
+#     
+#     # lay out pages for this cut‑point
+#     chunk(plots, plots_per_page) %>% 
+#       map(~wrap_plots(.x, ncol = ceiling(sqrt(plots_per_page))) +
+#             plot_annotation(
+#               title = paste("Albumin Index cut‑point:", label),
+#               theme = theme(plot.title = element_text(size = 18, face = "bold"))
+#             )) %>% 
+#       walk(print)                                           # send pages to the pdf device
+#   })
+# 
+# dev.off()
+# 
+# # 2. count non‐missing fl_csf_rbc_log2 by above/below cut_95
+# # dat_baseline_AD_VD %>%
+# #   mutate(
+# #     status = if_else(fl_albumin_index > cut_95, "Above_95", "Below_95")
+# #   ) %>%
+# #   group_by(status) %>%
+# #   summarize(
+# #     n_with_rbc = sum(!is.na(fl_csf_rbc_log2)),
+# #     total      = n()
+# #   )
+# 
+# 
+# 
+# # # the 2nd dataset (Literature 9):
+# # df_lit9 <- cut_pts$data[[2]]
+# # 
+# # # a quick peek:
+# # df_lit9 %>% dplyr::select(fl_albumin_index, status) %>% head()
+# 
+# 
+# 
+# 
+# ## ------------------------------------------------------------------
+# ## 1.  Helper to pick important variables from a binary outcome
+# ## ------------------------------------------------------------------
+# identify_important_variables <- function(data, status_var, predictors,
+#                                          n_trees = 500) {
+#   model_data <- data[, c(status_var, predictors)] |>
+#                 tidyr::drop_na()        # fast NA fill
+# 
+#   rf_formula <- reformulate(predictors, response = status_var)
+# 
+#   set.seed(123)
+#   rf <- randomForest(
+#           formula   = rf_formula,
+#           data      = model_data,
+#           ntree     = n_trees,
+#           importance= TRUE
+#         )
+# 
+#   var_imp <- importance(rf, type = 2)[, "MeanDecreaseGini"]
+#   names(var_imp)[var_imp > 0]
+# }
+# 
+# ## ------------------------------------------------------------------
+# ## 2.  Final RF with those variables  +  accuracy / confusion
+# ## ------------------------------------------------------------------
+# run_rf_analysis <- function(data, status_var, predictors, n_trees = 500) {
+# 
+#   model_data <- data[, c(status_var, predictors)] |>
+#                 tidyr::drop_na()
+# 
+#   rf_formula <- reformulate(predictors, response = status_var)
+# 
+#   set.seed(123)
+#   rf_model <- randomForest(
+#                formula   = rf_formula,
+#                data      = model_data,
+#                ntree     = n_trees,
+#                importance= TRUE,
+#                strata    = model_data[[status_var]],
+#                sampsize  = rep(min(table(model_data[[status_var]])), 2)
+#              )
+# 
+#   pred  <- predict(rf_model)
+#   cm    <- table(Predicted = pred, Actual = model_data[[status_var]])
+#   acc   <- sum(diag(cm)) / sum(cm)
+# 
+#   imp_df <- importance(rf_model, type = 2)[, "MeanDecreaseGini"] |>
+#             sort(decreasing = TRUE) |>
+#             stack() |>
+#             setNames(c("importance", "variable"))
+# 
+#   list(model = rf_model,
+#        importance = imp_df,
+#        performance = list(confusion_matrix = cm,
+#                           accuracy = acc,
+#                           n_obs = nrow(model_data)))
+# }
+# 
+# ## ------------------------------------------------------------------
+# ## 3.  Apply once for each albumin‑index cut‑point
+# ## ------------------------------------------------------------------
+# for (i in seq_len(nrow(cut_pts))) {
+# 
+#   cp  <- cut_pts$cutoff[i]
+#   lbl <- cut_pts$label[i]
+# 
+#   dat_i <- dat_baseline_AD_VD |>
+#            mutate(status = factor(if_else(fl_albumin_index_log2 > cp, 1, 0),
+#                                   levels = c(0, 1)))
+# model_data <- dat_i[, c("status", some_biomarkers_albumin)] %>% drop_na()
+# if (n_distinct(model_data$status) < 2) {
+#   cat(lbl, ": only one class present, skipping RF\n")
+#   next
+# }
+#   # 3A – get variables with positive Gini gain
+#   important_vars <- identify_important_variables(
+#                       data       = dat_i,
+#                       status_var = "status",
+#                       predictors = some_biomarkers_albumin
+#                     )
+# 
+#   cat("\n", lbl, ": important variables\n")
+#   print(important_vars)
+# 
+#   # 3B – final RF on those variables
+#   final_rf <- run_rf_analysis(
+#                 data       = dat_i,
+#                 status_var = "status",
+#                 predictors = important_vars
+#               )
+# 
+#   cat("  Accuracy:", round(final_rf$performance$accuracy, 3),
+#       " |  n =", final_rf$performance$n_obs, "\n")
+#   print(final_rf$performance$confusion_matrix)
+# 
+#   # 3C – quick importance barplot 
+#   ggplot(final_rf$importance,
+#          aes(reorder(variable, importance), importance)) +
+#     geom_col(fill = "steelblue") + coord_flip() +
+#     labs(title = paste("RF importance –", lbl),
+#          x = NULL, y = "Mean Decrease Gini") +
+#     theme_minimal(base_size = 12)
+# }
+# 
+# 
+# # Only one class left so I have to see what I can do like check the number of observation and then add the modeling
+# 
+# 
+# 
+# 
+# 
+# 
+# 
+# 
+# 
+# 
+# 
+# 
+# 
+# 
+# 
+# 
+# # combination of plasma biomarkers
+# 
+# 
+# # Get only plasma biomarkers ending in _log2
+# find_optimal_log2_groups <- function(data, min_cases = 30) {
+#   # Get only plasma markers ending in _log2
+#   plasma_markers <- grep("^fl_plasma.*_log2$", names(data), value = TRUE)
+#   
+#   # Start with outcome variable
+#   current_vars <- c("fl_albumin_index_log2")
+#   results <- list()
+#   
+#   for(marker in plasma_markers) {
+#     temp_vars <- c(current_vars, marker)
+#     complete_cases <- sum(complete.cases(data[, temp_vars]))
+#     
+#     if(complete_cases >= min_cases) {
+#       current_vars <- temp_vars
+#       results[[length(results) + 1]] <- list(
+#         variables = current_vars,
+#         complete_cases = complete_cases
+#       )
+#     }
+#   }
+#   return(results)
+# }
+# 
+# # Apply the function
+# log2_groups <- find_optimal_log2_groups(dat_baseline_AD_VD)
+# 
+# # Print summary of available biomarkers and sample sizes
+# for(i in seq_along(log2_groups)) {
+#   cat("\nGroup", i, ":\n")
+#   cat("Variables:", paste(log2_groups[[i]]$variables[-1], collapse = ", "), "\n")
+#   cat("Complete cases:", log2_groups[[i]]$complete_cases, "\n")
+# }
+# 
+# # Get the final set of all log2 biomarkers
+# final_log2_vars <- log2_groups[[length(log2_groups)]]$variables
+# 
+# # Print final number of biomarkers and sample size
+# cat("\nFinal model will include:", length(final_log2_vars)-1, "biomarkers\n")
+# cat("With sample size:", log2_groups[[length(log2_groups)]]$complete_cases, "\n")
+# 
+# # Function to print breakpoint summary
+# summarize_breakpoints <- function(groups) {
+#   prev_vars <- NULL
+#   prev_n <- NULL
+#   
+#   cat("Sample Size Breakpoints:\n")
+#   
+#   for(i in seq_along(groups)) {
+#     current_vars <- groups[[i]]$variables[-1]  # exclude outcome variable
+#     current_n <- groups[[i]]$complete_cases
+#     
+#     if(is.null(prev_n) || current_n != prev_n) {
+#       new_vars <- if(is.null(prev_vars)) {
+#         current_vars
+#       } else {
+#         setdiff(current_vars, prev_vars)
+#       }
+#       
+#       # Clean up variable names for display
+#       clean_vars <- gsub("fl_plasma__ALL__", "", new_vars)
+#       clean_vars <- gsub("_log2", "", clean_vars)
+#       
+#       cat(sprintf("%d cases: %s\n", 
+#                   current_n,
+#                   if(i == 1) {
+#                     sprintf("starting with %s", paste(clean_vars, collapse = " and "))
+#                   } else {
+#                     sprintf("adding %s", paste(clean_vars, collapse = " and "))
+#                   }))
+#       
+#       prev_vars <- current_vars
+#       prev_n <- current_n
+#     }
+#   }
+# }
+# 
+# # Apply the function to your groups
+# summarize_breakpoints(log2_groups)
+# 
+# # Also show the complete list of final variables
+# cat("\nFinal set of biomarkers:\n")
+# final_vars <- gsub("fl_plasma__ALL__", "", 
+#                   gsub("_log2", "", 
+#                        log2_groups[[length(log2_groups)]]$variables[-1]))
+# cat(paste(final_vars, collapse = "\n"))
+# 
+# 
+# # Or 
+# e_data_complete_by_variable_subset(dat_all_combine_AD_VD, var_list = c(some_biomarkers_vd, "fl_albumin_index_log2"), var_resp = "fl_albumin_index_log2")
+# 
+# # now define base on the result of the number of observation and Importance one 
+# some_biomarkers_albumin <- c(
+#  # "fl_csf_glucose_log2",
+#  # "fl_csf_total_protein_log2",
+#  # "fl_csf_rbc_log2",
+#  # "fl_csf_tnc_log2",
+#  # "fl_csf_igg_log2",
+#  # "fl_csf_albumin_log2",           
+#  # "fl_csf_igg_synthesis_log2",     
+#  # "fl_abeta_38_log2",
+#  "fl_csf__ALL__gfap_log2",
+#  "fl_plasma__ALL__gfap_log2",
+#  "fl_csf__ALL__nfl_log2",
+#  "fl_plasma__ALL__nfl_log2",
+#  # "fl_csf__ALL__ptau_log2",        
+#  "fl_plasma__ALL__ptau_181_log2",
+#  "fl_plasma__ALL__abeta42_40_ratio_log2",
+#  # "fl_plasma__ALL__ptau_217_log2",
+#  # "fl_csf__ALL__abeta_40_log2",   
+#  # "fl_plasma__ALL__abeta_40_log2",
+#  # # "fl_csf__ALL__abeta_42_log2" ,   
+#  # "fl_plasma__ALL__abeta_42_log2",
+#  # "fl_csf__ALL__plgf_log2",
+#  "fl_plasma__ALL__plgf_log2" ,
+#  # "fl_csf__ALL__il_1b_log2" ,     
+#  # "fl_plasma__ALL__il_1b_log2", 
+#  # "fl_plasma__ALL__mmp_2_log2" ,
+#  "fl_plasma__ALL__mmp_1_log2",
+# "fl_plasma__ALL__mmp_3_log2" ,
+#  "fl_plasma__ALL__mmp_9_log2" ,
+#  "fl_plasma__ALL__mmp_10_log2",
+#  "fl_csf__ALL__mmp_10_log2" ,
+#  "fl_plasma__ALL__bfgf_log2",
+# "fl_plasma__ALL__flt_1_log2",
+#  "fl_plasma__ALL__tie2_log2" ,
+#  "fl_plasma__ALL__vegf_a_log2",
+#  "fl_plasma__ALL__vegf_c_log2",
+#  "fl_plasma__ALL__vegf_d_log2"
+# 
+# )
+# 
+# 
+# n_complete <- sum(complete.cases(dat_baseline_AD_VD[, c("fl_albumin_index_log2", some_biomarkers_albumin)]))
+# print(n_complete) # Only one remained
+# 
+# sapply(some_biomarkers_vd, function(x) sum(!is.na(dat_baseline_AD_VD[[x]])))
+# 
+# # your 4 cut-points & labels
+# cut_pts <- tibble(
+#   cutoff = c(cut_75, lit9_log2, lit10.2_l2, lit5.5_l2),
+#   label  = c("75th % Control", "Literature 9", "Literature 10.2", "Literature 5.5")
+# )
+# 
+# # open PDF device: one page per cut‐point
+# pdf("RF_VarImp_by_cutpoint.pdf", onefile = TRUE, width = 8, height = 6)
+# 
+# for (i in seq_len(nrow(cut_pts))) {
+#   cp  <- cut_pts$cutoff[i]
+#   lbl <- cut_pts$label[i]
+# 
+#   # 1) build the status + keep only the 11 plasma markers
+#   df_rf <- dat_baseline_AD_VD %>%
+#     mutate(status = factor(if_else(fl_albumin_index > cp, 1, 0),
+#                            levels = c(0, 1))) %>%
+#     select(status, all_of(some_biomarkers_albumin)) %>%
+#     drop_na()
+# 
+#   # skip if only one class remains
+#   if (n_distinct(df_rf$status) < 2) {
+#     message(lbl, ": only one class present—skipping")
+#     next
+#   }
+# 
+#   # 2) train a balanced RF
+#   set.seed(123)
+#   rf_fit <- randomForest(
+#     status ~ .,
+#     data       = df_rf,
+#     ntree      = 1000,
+#     importance = TRUE
+#     # strata     = df_rf$status,
+#     # sampsize   = rep(min(table(df_rf$status)), 2)
+#   )
+# 
+#   # 3) extract and tidy the Gini importances
+#   imp_df <- importance(rf_fit, type = 2)[, "MeanDecreaseGini"] %>%
+#     enframe(name = "variable", value = "importance") %>%
+#     arrange(importance)
+# 
+#   # 4) plot horizontal bar chart
+#   p <- ggplot(imp_df, aes(x = reorder(variable, importance), y = importance)) +
+#     geom_col(fill = "steelblue") +
+#     coord_flip() +
+#     labs(
+#       title = paste("RF Variable Importance —", lbl),
+#       x     = NULL,
+#       y     = "Mean Decrease Gini"
+#     ) +
+#     theme_minimal(base_size = 12)
+# 
+#   print(p)
+# }
+# 
+# dev.off()
+# 
+# 
+# 
+# 
+# 
+# 
+# 
+# 
+# ## -----------------------------------------------------------
+# ##  ROC curves for albumin-index status at each cut‑point
+# ## -----------------------------------------------------------
+# 
+# for (i in seq_len(nrow(cut_pts))) {
+#   
+#   cp  <- cut_pts$cutoff[i]
+#   lbl <- cut_pts$label[i]
+# 
+#   ## 1. create the binary outcome for this cut point
+#   df_i <- dat_baseline_AD_VD %>%
+#             mutate(status = factor(if_else(fl_albumin_index > cp, 1, 0),
+#                                    levels = c(0, 1))) %>%
+#             select(status, all_of(some_biomarkers_albumin)) %>%
+#             drop_na()                              # complete cases
+# 
+#   ## need both classes
+#   if (dplyr::n_distinct(df_i$status) < 2) {
+#     message(lbl, " → only one class; skipping")
+#     next
+#   }
+# 
+#   ## 2. fit a simple logistic model with all biomarkers
+#   fit <- glm(status ~ ., family = binomial, data = df_i)
+# 
+#   ## 3. predicted probabilities
+#   df_i$pred <- predict(fit, type = "response")
+# 
+#   ## 4. ROC plot
+#   roc_plot <- e_plot_roc(
+#                 labels_true     = df_i$status,
+#                 pred_values_pos = df_i$pred,
+#                 label_neg_pos   = c(0, 1),
+#                 sw_plot         = TRUE,
+#                 sw_caption_desc = FALSE
+#               )$plot_roc +
+#               ggtitle(paste("Albumin cut‑point:", lbl))
+# 
+#   print(roc_plot)     
+#   
+# }
+# 
+# # add the glm for the all plasma and csf combination but base on the Imp pdf and also this is glm 
+# 
+# # drop number of varb base on the imp pdf then again apply the rF 
+# 
+# # larger sample size choose Vb , keep only IMP VB maybe RM the baseline for first pass and then later filter on baseline
+# 
+# # which featuers are more varibles visiti to visit if albumin chnage a lot depedn time of daya maybe albumin is highly variabels , albumin is consisitent and one varies a lot that varibles will be less important 
+# 
+# # so working with larger sample size base on not only baseline, it is okay to do that ,
+# # how much info is more valuable for us , since we do prediction is m=not matter that much how much obs are dependent from each other
+# 
+# # e-randomforest option for imputation look for missing NA and include only one have lower NA and include and have RF impute those NA sw_NA_action omit or impute sw quick full only does not do model selection
+```
+
+# AFter meeting with Erik and Run the above code these are the changes I need to make
+
+"Use more data" → Don't limit to baseline visits only "Let the computer fill gaps" → Use Random Forest to handle missing values "Focus on what matters" → Use importance rankings to pick best biomarkers "Check consistency" → Make sure biomarkers are stable over time Note here I did not use the cutpoint for Albumin
+
+```{r}
+# ===================================================================
+# Expanding beyond baseline + RF imputation + Variable importance
+# ===================================================================
+library(randomForest)
+library(patchwork)
+library(VIM)  # for missing data visualization
+library(purrr)
+
+# ===================================================================
+# 1. EXPAND BEYOND BASELINE (Address sample size issues)
+# ===================================================================
+
+# Use ALL visits, not just baseline
+dat_expanded <- dat_all_combine |>
+  mutate(
+    TripleDichotomy_VD = mri_dti_psmd_z,
+    TripleDichotomy_VD_log2 = e_log_shift(TripleDichotomy_VD),
+    TripleDichotomy_AD = (fl_csf__ALL__ptau / fl_csf__ALL__abeta_42),
+    TripleDichotomy_AD_log2 = log2(TripleDichotomy_AD),
+    fl_plasma__ALL__abeta42_40_ratio_log2 = log2(fl_plasma__ALL__abeta_42/fl_plasma__ALL__abeta_40)
+  )
+
+cat("Expanded dataset size:", nrow(dat_expanded), "observations\n")
+# cat("Baseline-only dataset size:", nrow(dat_all_combine_AD_VD), "observations\n")
+
+# ===================================================================
+# 2. SMART VARIABLE SELECTION BASED ON IMPORTANCE
+# ===================================================================
+
+# Define ALL potential biomarkers
+all_potential_biomarkers <-  c(
+ "fl_csf_glucose_log2",
+ "fl_csf_total_protein_log2",
+ "fl_csf_rbc_log2",
+ "fl_csf_tnc_log2",
+ "fl_csf_igg_log2",
+ # "fl_csf_albumin_log2",
+ "fl_csf_igg_synthesis_log2",
+ "fl_abeta_38_log2",
+ "fl_csf__ALL__gfap_log2",
+ "fl_plasma__ALL__gfap_log2",
+ "fl_csf__ALL__nfl_log2",
+ "fl_plasma__ALL__nfl_log2",
+ "fl_csf__ALL__ptau_log2",
+ "fl_plasma__ALL__ptau_181_log2",
+ "fl_plasma__ALL__abeta42_40_ratio_log2",
+ "fl_plasma__ALL__ptau_217_log2",
+ "fl_csf__ALL__abeta_40_log2",
+ "fl_plasma__ALL__abeta_40_log2",
+ "fl_csf__ALL__abeta_42_log2" ,
+ "fl_plasma__ALL__abeta_42_log2",
+ "fl_csf__ALL__plgf_log2",
+ "fl_plasma__ALL__plgf_log2" ,
+ "fl_csf__ALL__il_1b_log2" ,
+ "fl_plasma__ALL__il_1b_log2",
+ "fl_plasma__ALL__mmp_2_log2" ,
+ "fl_plasma__ALL__mmp_1_log2",
+"fl_plasma__ALL__mmp_3_log2" ,
+ "fl_plasma__ALL__mmp_9_log2" ,
+ "fl_plasma__ALL__mmp_10_log2",
+ "fl_csf__ALL__mmp_10_log2" ,
+ "fl_plasma__ALL__bfgf_log2",
+"fl_plasma__ALL__flt_1_log2",
+ "fl_plasma__ALL__tie2_log2" ,
+ "fl_plasma__ALL__vegf_a_log2",
+ "fl_plasma__ALL__vegf_c_log2",
+ "fl_plasma__ALL__vegf_d_log2"
+)
+
+# Check missing data patterns
+missing_summary <- dat_expanded %>%
+  select(fl_albumin_index_log2, all_of(all_potential_biomarkers)) %>%
+  summarise_all(~sum(is.na(.))) %>%
+  pivot_longer(everything(), names_to = "variable", values_to = "missing_count") %>%
+  mutate(
+    total_obs = nrow(dat_expanded),
+    missing_pct = (missing_count / total_obs) * 100,
+    available_pct = 100 - missing_pct
+  ) %>%
+  arrange(missing_pct)
+
+# Visualize missing data pattern
+ggplot(missing_summary, aes(x = reorder(variable, -missing_pct), y = missing_pct)) +
+  geom_col(fill = "steelblue") +
+  coord_flip() +
+  labs(title = "Missing Data Percentage by Biomarker",
+       x = "Biomarker", y = "Missing Data %") +
+  theme_minimal() +
+  theme(axis.text.y = element_text(size = 8))
+
+# 3. GET INITIAL IMPORTANCE (one RF per variable with available data)
+get_univariate_importance <- function(data,
+                                      outcome,
+                                      predictors) {
+  imp_scores <- sapply(predictors, function(var) {
+    temp_data <- data[, c(outcome, var)] |> na.omit()
+    if(nrow(temp_data) < 50) return(0)
+    
+    rf <- randomForest(as.formula(paste(outcome, "~", var)), 
+                      data = temp_data,
+                      ntree = 100)
+    tail(rf$rsq, 1)
+  })
+  
+  data.frame(
+    variable = names(imp_scores),
+    importance = imp_scores
+  ) |> arrange(desc(importance))
+}
+
+initial_importance <- get_univariate_importance(
+  data = dat_expanded,
+  outcome = "fl_albumin_index_log2",
+  predictors = all_potential_biomarkers)
+print(head(initial_importance, 10))
+
+
+# 4. ITERATIVE RF WITH TOP VARIABLES
+build_progressive_rf <- function(data, outcome, importance_df, max_vars = 15) {
+  results <- list()
+  
+  for(n in c(3, 5, 8, 10, 12, 15)) {
+    if(n > nrow(importance_df)) n <- nrow(importance_df)
+    
+    top_vars <- importance_df$variable[1:n]
+    temp_data <- data[, c(outcome, top_vars)]
+    
+    # Two approaches: complete cases vs imputation
+    # Approach 1: Complete cases
+    complete_data <- na.omit(temp_data)
+    if(nrow(complete_data) > 50) {
+      rf_complete <- randomForest(as.formula(paste(outcome, "~ .")), 
+                                 data = complete_data, ntree = 500)
+      r2_complete <- tail(rf_complete$rsq, 1)
+    } else {
+      r2_complete <- NA
+    }
+    
+    # Approach 2: With imputation
+    if(nrow(temp_data[!is.na(temp_data[[outcome]]), ]) > 50) {
+      rf_imputed <- randomForest(as.formula(paste(outcome, "~ .")), 
+                                data = temp_data[!is.na(temp_data[[outcome]]), ],
+                                ntree = 500, na.action = na.roughfix)
+      r2_imputed <- tail(rf_imputed$rsq, 1)  # RF's built-in imputation method
+    } else {
+      r2_imputed <- NA
+    }
+    
+    results[[as.character(n)]] <- list(
+      n_vars = n,
+      n_complete = nrow(complete_data),
+      n_imputed = nrow(temp_data[!is.na(temp_data[[outcome]]), ]),
+      r2_complete = r2_complete,
+      r2_imputed = r2_imputed,
+      variables = top_vars
+    )
+  }
+  
+  results
+}
+
+rf_results <- build_progressive_rf(
+  data = dat_expanded,
+  outcome = "fl_albumin_index_log2", 
+   importance_df = initial_importance)
+
+
+
+ #Plot R-squared comparison
+# library(tidyr)
+# results_long <- results_df |>
+#   select(n_vars, Complete_Cases, With_Imputation) |>
+#   pivot_longer(-n_vars, names_to = "Method", values_to = "R_squared")
+# 
+# ggplot(results_long, aes(x = n_vars, y = R_squared, color = Method)) +
+#   geom_line(size = 1.2) +
+#   geom_point(size = 3) +
+#   scale_color_manual(values = c("Complete_Cases" = "blue", "With_Imputation" = "red")) +
+#   labs(title = "Model Performance: Complete Cases vs Imputation",
+#        x = "Number of Variables", y = "R-squared") +
+#   theme_minimal() +
+#   theme(legend.position = "bottom")
+
+
+
+
+# 6. FINAL MODEL WITH OPTIMAL VARIABLES (3-variable complete cases)
+optimal_n <- 3  # Use 3 variables instead of max imputation
+final_vars <- rf_results[["3"]]$variables
+cat("\nOPTIMAL MODEL:")
+cat("\nVariables:", optimal_n)
+cat("\nR² (complete cases):", round(results_df$Complete_Cases[results_df$n_vars == 3], 3))
+cat("\nSample size:", results_df$n_obs_complete[results_df$n_vars == 3])
+
+# Final model with complete cases (no imputation)
+final_data <- dat_expanded[, c("fl_albumin_index_log2", final_vars)] |>
+  na.omit()  # Complete cases only
+
+final_rf <- randomForest(
+  fl_albumin_index_log2 ~ .,
+  data = final_data,
+  ntree = 1000,
+  importance = TRUE
+)
+
+# Variable importance plot
+imp_final <- importance(final_rf) |>
+  as.data.frame() |>
+  tibble::rownames_to_column("variable") |>
+  mutate(clean_name = gsub(".*__ALL__|_log2", "", variable)) |>
+  arrange(desc(`%IncMSE`))
+
+ggplot(imp_final, aes(x = reorder(clean_name, `%IncMSE`), y = `%IncMSE`)) +
+  geom_col(fill = "darkgreen") +
+  coord_flip() +
+  labs(title = "Final Model: Variable Importance",
+       x = NULL, y = "% Increase in MSE") +
+  theme_minimal()
+
+print(final_rf)
+
+
+
+# need to work on this tom
+
+
+
+library(tidymodels)
+library(purrr)
+library(tidymodels)
+library(forcats)
+# ------------------------------------------------------------------
+# 0.  DATA  (continuous outcome + 3 predictors + true binary label)
+# ------------------------------------------------------------------
+vars <- c("fl_albumin_index_log2", final_vars)
+d_raw <- dat_expanded |>
+         select(all_of(vars), dx_biological, age) |>   # keep age+dx for strat rule
+         drop_na()                                     # complete cases only
+
+# build the binary “ground-truth” label once,
+# here: 95th percentile of controls <65 y
+cut_true <- quantile(
+  d_raw$fl_albumin_index_log2[
+    d_raw$dx_biological == "LA"], probs= 0.75, na.rm = TRUE
+)
+
+# cut_75 <- quantile (dat_baseline_AD_VD$fl_albumin_index_log2
+#                                       [dat_baseline_AD_VD$dx_biological == "LA"], probs = 0.75,
+#                                       na.rm = TRUE) 
+
+
+d <- d_raw |>
+     mutate(albumin_hi = factor(fl_albumin_index_log2 > cut_true,
+                                levels = c(FALSE, TRUE),
+                                labels = c("normal", "elevated"))) |>
+     select(-dx_biological, -age)                      # not used downstream
+
+# ------------------------------------------------------------------
+# 1.  80 / 20 split  (stratified)
+# ------------------------------------------------------------------
+set.seed(2025)
+split_obj <- initial_split(d, prop = 0.80, strata = albumin_hi)
+d_train   <- training(split_obj)
+d_test    <- testing(split_obj)        # remains completely untouched
+
+# ------------------------------------------------------------------
+# 2.  Inner 10-fold CV on the 80 %
+# ------------------------------------------------------------------
+folds <- vfold_cv(d_train, v = 10, strata = albumin_hi)
+
+# Helper to choose a cut-point on a training slice
+choose_threshold <- function(truth, pred_cont, rule = "youden") {
+
+  df <- tibble(
+    truth = fct_relevel(truth, "normal", "elevated"),
+    .pred = pred_cont
+  )
+
+  roc_tbl <- roc_curve(df, truth = truth, .pred, event_level = "second")
+
+  if (rule == "youden") {
+    roc_tbl %>%
+      mutate(j = sensitivity + specificity - 1) %>%
+      slice_max(j, n = 1) %>%
+      pull(.threshold)
+  } else {
+    stop("only 'youden' implemented")
+  }
+}
+
+
+# run across folds
+cv_stats <- map_dfr(folds$splits, function(sp) {
+  tr <- analysis(sp)
+  va <- assessment(sp)
+
+  fit <- glm(fl_albumin_index_log2 ~ . - albumin_hi,
+             data   = tr,
+             family = gaussian())
+
+  pred_tr <- predict(fit, newdata = tr)
+  thr     <- choose_threshold(tr$albumin_hi, pred_tr)   # fold-specific
+
+  pred_va <- predict(fit, newdata = va)
+  class_va<- factor(pred_va > thr, levels = c(FALSE, TRUE),
+                                  labels  = c("normal", "elevated"))
+
+  tibble(
+    id   = sp$id,
+    thr  = thr,
+    sens = sensitivity_vec(va$albumin_hi, class_va, event_level = "second"),
+    spec = specificity_vec(va$albumin_hi, class_va, event_level = "second"),
+    auc  = roc_auc_vec     (va$albumin_hi, pred_va, event_level = "second")
+  )
+})
+
+print(cv_stats)
+cv_stats |>
+  summarise(across(c(thr, sens, spec, auc),
+                   list(mean = mean, sd = sd), .names = "{.col}_{.fn}"))
+
+# ------------------------------------------------------------------
+# 3.  Fit final model on 100 % of the training data
+# ------------------------------------------------------------------
+final_glm <- glm(fl_albumin_index_log2 ~ . - albumin_hi,
+                 data   = d_train,
+                 family = gaussian())
+
+# Derive ONE frozen cut-point on the full training set
+train_pred <- predict(final_glm, newdata = d_train)
+thr_final  <- choose_threshold(d_train$albumin_hi, train_pred)  # still Youden J
+
+# optionally round or publish as is
+cat("Frozen threshold (log2 scale):", round(thr_final, 3), "\n")
+
+# ------------------------------------------------------------------
+# 4.  Evaluate on the untouched 20 % test set
+# ------------------------------------------------------------------
+test_pred  <- predict(final_glm, newdata = d_test)
+
+test_res   <- tibble(
+  truth    = d_test$albumin_hi |> forcats::fct_relevel("normal", "elevated"),
+  pred_num = test_pred,                                    # continuous
+  pred_cls = factor(test_pred > thr_final,                 # binary
+                    levels = c(FALSE, TRUE),
+                    labels  = c("normal", "elevated"))
+)
+
+cat("\n=== TEST-SET PERFORMANCE ===\n")
+
+## 4·1  confusion matrix
+print(conf_mat(test_res, truth = truth, estimate = pred_cls))
+
+acc <- accuracy_vec(truth = test_res$truth,
+                    estimate = test_res$pred_cls)
+sens <- sensitivity_vec(truth = test_res$truth,
+                        estimate = test_res$pred_cls,
+                        event_level = "second")
+spec <- specificity_vec(truth = test_res$truth,
+                        estimate = test_res$pred_cls,
+                        event_level = "second")
+
+tibble(metric = c("accuracy", "sensitivity", "specificity"),
+       value  = c(acc, sens, spec))
+
+
+# ------------------------------------------------------------------
+# 5.  Save model & threshold for deployment
+# ------------------------------------------------------------------
+saveRDS(final_glm, "albumin_glm_v1.rds")
+saveRDS(thr_final, "albumin_thr_v1.rds")
+
+# l_csf_total_protein_log2 has albumin
+
+```
+
+for now this is good i belive there is no realtionship exist btw then we applied the glm in the poster too anyway let go for now and need to read my way again
+
+# This code is for myself to investigate baseline vs non baseline in DX and Investigate more I did talk about this to Erik , also to see age effect on labumin index
+
+```{r}
+# This code is for myself to investigate baseline vs non baseline in DX 
+# Critical Finding:
+# 
+# ALL diagnosis groups have NA for non-baseline observations
+# Only the NA diagnosis group has any non-baseline data (8 observations)
+# Every other group is 100% baseline data
+# ===================================================================
+# INVESTIGATE BASELINE vs NON-BASELINE MYSTERY
+# Why do filtered and unfiltered datasets look so similar?
+# ===================================================================
+library(dplyr)
+library(ggplot2)
+library(tidyr)
+library(patchwork)
+
+
+# cat("\n=== DIAGNOSIS BREAKDOWN BY VISIT TYPE ===\n")
+# 
+# # For subjects with albumin data
+# dx_visit_breakdown <- dat_all_combine %>%
+#   filter(!is.na(fl_albumin_index_log2)) %>%
+#   mutate(
+#     visit_type = if_else(redcap_event_name %in% baseline_visits, 
+#                         "Baseline", "Non_Baseline")  # Use underscore instead of hyphen
+#   ) %>%
+#   group_by(dx_biological, visit_type) %>%
+#   summarise(
+#     n_observations = n(),
+#     n_subjects = n_distinct(ptid),  # Fixed: use subject_id instead of ptid
+#     median_albumin = median(fl_albumin_index_log2, na.rm = TRUE),
+#     mean_albumin = mean(fl_albumin_index_log2, na.rm = TRUE),
+#     sd_albumin = sd(fl_albumin_index_log2, na.rm = TRUE),
+#     .groups = 'drop'
+#   ) %>%
+#   pivot_wider(
+#     names_from = visit_type,
+#     values_from = c(n_observations, n_subjects, median_albumin, mean_albumin, sd_albumin),
+#     names_sep = "_"
+#   ) %>%
+#   mutate(
+#     # Calculate differences - now using proper column names
+#     median_diff = median_albumin_Baseline - median_albumin_Non_Baseline,
+#     mean_diff = mean_albumin_Baseline - mean_albumin_Non_Baseline
+#   )
+# 
+# print(dx_visit_breakdown)
+
+
+
+#Investigates Age Effect:
+
+# Tests correlation between age and albumin in controls
+# Shows if older "controls" have higher albumin (BBB dysfunction)
+
+# Discovered:
+# Control group heterogeneity is explained by age
+# ===================================================================
+# 1. INVESTIGATE AGE EFFECT IN CONTROLS
+# ==================================================================
+cat("=== AGE EFFECT IN CONTROLS ===\n")
+
+# Focus on controls only
+controls_data <- dat_baseline_AD_VD %>%
+  filter(dx_biological == "Control", 
+         !is.na(fl_albumin_index_log2), 
+         !is.na(age))
+
+cat("Total controls with albumin and age data:", 
+    nrow(controls_data), "\n")
+cat("Age range:", round(min(controls_data$age), 1), 
+    "-", 
+    round(max(controls_data$age), 1), 
+    "years\n")
+cat("Mean age:",
+    round(mean(controls_data$age), 1), 
+    "years\n")
+
+# Check age-albumin correlation in controls
+age_albumin_cor <- cor(controls_data$age, controls_data$fl_albumin_index_log2, use = "complete.obs")
+cat("Age-albumin correlation in controls:", round(age_albumin_cor, 3), "\n")
+
+# # Test statistical significance
+# age_albumin_test <- cor.test(controls_data$age, controls_data$fl_albumin_index_log2)
+# cat("Correlation p-value:", round(age_albumin_test$p.value, 4), "\n")
+
+e_plot_scatterplot (
+  dat_plot = controls_data,
+  var_x = "age",
+  var_y = "fl_albumin_index_log2",
+  smooth_all = c("lm")
+)
+
+# shapiro.test(controls_data$age)
+# shapiro.test(controls_data$fl_albumin_index_log2)
+
+# ===================================================================
+# 2. VISUALIZE AGE EFFECT
+# ===================================================================
+
+# Age vs albumin scatter plot for controls
+# age_albumin_plot <- ggplot(controls_data, aes(x = age, y = fl_albumin_index_log2)) +
+#   geom_point(alpha = 0.6, size = 2) +
+#   geom_smooth(method = "lm", se = TRUE, color = "blue") +
+#   geom_smooth(method = "loess", se = FALSE, color = "red", linetype = "dashed") +
+#   labs(title = "Age vs Albumin Index in Controls",
+#        subtitle = paste("r =", round(age_albumin_cor, 3), 
+#                         ", p =", round(age_albumin_test$p.value, 4)),
+#        x = "Age (years)", y = "Albumin Index (log2)") +
+#   theme_bw()
+# 
+# print(age_albumin_plot)
+
+
+
+
+# ===================================================================
+# 3. AGE-STRATIFIED CONTROL GROUPS
+# ===================================================================
+
+cat("\n=== AGE-STRATIFIED CONTROL ANALYSIS ===\n")
+
+# Define age groups for controls
+controls_age_stratified <- controls_data %>%
+  mutate(
+    age_group = case_when(
+      age < 50 ~ "Young (<50)",
+      age >= 50 & age < 65 ~ "Middle (50-64)", 
+      age >= 65 & age < 75 ~ "Older (65-74)",
+      age >= 75 ~ "Elderly (75+)",
+      TRUE ~ "Unknown"
+    ),
+    age_group = factor(age_group, 
+                       levels = c("Young (<50)",
+                                  "Middle (50-64)", 
+                                  "Older (65-74)", 
+                                  "Elderly (75+)"))
+  )
+
+# Summary by age group
+age_group_summary <- controls_age_stratified %>%
+  group_by(age_group) %>%
+  summarise(
+    n = n(),
+    mean_age = round(mean(age), 1),
+    mean_albumin = round(mean(fl_albumin_index_log2), 3),
+    sd_albumin = round(sd(fl_albumin_index_log2), 3),
+    median_albumin = round(median(fl_albumin_index_log2), 3),
+    q75_albumin = round(quantile(fl_albumin_index_log2, 0.75), 3),
+    q90_albumin = round(quantile(fl_albumin_index_log2, 0.90), 3),
+    q95_albumin = round(quantile(fl_albumin_index_log2, 0.95), 3),
+    .groups = 'drop'
+  )
+
+cat("Controls by age group:\n")
+print(age_group_summary)
+
+# ===================================================================
+# 4. CHOOSE OPTIMAL AGE-STRATIFIED CUTPOINT
+# ===================================================================
+
+#  Use younger, healthier controls for cut-point
+#Older controls may have subclinical BBB dysfunction, or not sure need to ask Erik
+
+# Option 1: Young controls only (<50 years)
+young_controls <- controls_age_stratified %>% filter(age < 50)
+
+# Option 2: Young + middle-aged controls (<65 years)
+youngmid_controls <- controls_age_stratified %>% filter(age < 65)
+
+# Option 3: Exclude elderly (< 75 years)
+non_elderly_controls <- controls_age_stratified %>% filter(age < 75)
+
+cat("\n=== AGE-STRATIFIED CUT-POINT OPTIONS ===\n")
+
+# Calculate cut-points for each age strategy
+if(nrow(young_controls) >= 20) {
+  cut_75_young <- quantile(young_controls$fl_albumin_index_log2, 0.75, na.rm = TRUE)
+  cat("Young controls (<50y, n=", nrow(young_controls), ") - 75th percentile:", round(cut_75_young, 3), "\n")
+} else {
+  cat("Young controls (<50y) - insufficient sample (n=", nrow(young_controls), ")\n")
+  cut_75_young <- NA
+}
+
+if(nrow(youngmid_controls) >= 30) {
+  cut_75_youngmid <- quantile(youngmid_controls$fl_albumin_index_log2, 0.75, na.rm = TRUE)
+  cat("Young+Mid controls (<65y, n=", nrow(youngmid_controls), ") - 95th percentile:", round(cut_95_youngmid, 3), "\n")
+} else {
+  cat("Young+Mid controls (<65y) - insufficient sample (n=", nrow(youngmid_controls), ")\n")
+  cut_75_youngmid <- NA
+}
+
+if(nrow(non_elderly_controls) >= 40) {
+  cut_75_nonelderly <- quantile(non_elderly_controls$fl_albumin_index_log2, 0.75, na.rm = TRUE)
+  cat("Non-elderly controls (<75y, n=", nrow(non_elderly_controls), ") - 75th percentile:", round(cut_95_nonelderly, 3), "\n")
+} else {
+  cat("Non-elderly controls (<75y) - insufficient sample (n=", nrow(non_elderly_controls), ")\n")
+  cut_75_nonelderly <- NA
+}
+
+# For comparison: all controls
+cut_75_all_controls <- quantile(controls_data$fl_albumin_index_log2, 0.75, na.rm = TRUE)
+cat("All controls (n=", nrow(controls_data), ") - 75th percentile:", round(cut_75_all_controls, 3), "\n")
+
+# ===================================================================
+# 5. VISUALIZE AGE DISTRIBUTIONS
+# ===================================================================
+
+# Boxplot by age group
+  age_boxplot <- ggplot(controls_age_stratified, aes(x = age_group, y = fl_albumin_index_log2)) +
+    geom_boxplot(fill = "lightblue", alpha = 0.7) +
+    geom_jitter(width = 0.2, alpha = 0.5) +
+    stat_summary(fun = mean, geom = "point", shape = 23, size = 3, fill = "red") +
+    labs(title = "Albumin Index Distribution by Age Group (Controls Only)",
+         subtitle = "Red diamonds = group means",
+         x = "Age Group", y = "Albumin Index (log2)") +
+    theme_bw() +
+    theme(axis.text.x = element_text(angle = 45, hjust = 1))
+  
+  print(age_boxplot)
+
+
+
+```
+
+
+
+
+Add these pairwise correlation matrix
+NFL, GFAP and others (ILs, etc) vs MMPs
+That is, for each inflammatory biomarkers, relate them to others to see if there are any relationships -- maybe summarize in a heatmap with corr values overlaid.
+Maybe a big correlation plot for all fluid variables together. I think there's a e_plot_correlation function.
+CSF-only, Plasma-only
+
+
+```{r}
+# Load required libraries
+library(dplyr)
+library(corrplot)
+library(Hmisc)
+library(ggplot2)
+library(gridExtra)
+library(cowplot)
+library(tidyselect)
+
+# ====== 1. IDENTIFY VARIABLE GROUPS ======
+
+# CSF variables
+csf_vars <- names(dat_sub_without_igg)[grepl("^fl_.*csf|^fl_msd_csf|^fl_cyto_csf|^fl_angio_csf|fl_albumin_index_log2|fl_abeta_4240_ratio_log2|fl_myelin_basic_protein_log2", names(dat_sub_without_igg))]
+
+# Plasma variables  
+plasma_vars <- names(dat_sub_without_igg)[grepl("^fl_plasma|^fl_cyto_heparin_plasma", names(dat_sub_without_igg))]
+
+# MMPs (both CSF and plasma)
+mmp_vars <- names(dat_sub_without_igg)[grepl("mmp", names(dat_sub_without_igg), ignore.case = TRUE)]
+
+# Inflammatory markers (ILs, TNF, IFN)
+inflammatory_vars <- names(dat_sub_without_igg)[grepl("il_|tnf_|ifn_", names(dat_sub_without_igg), ignore.case = TRUE)]
+
+# Neurological markers (NFL, GFAP, etc.)
+neuro_vars <- names(dat_sub_without_igg)[grepl("nfl_|gfap_|ptau_|abeta", names(dat_sub_without_igg), ignore.case = TRUE)]
+
+# Print variable groups for verification
+cat("CSF variables (", length(csf_vars), "):\n")
+cat(paste(csf_vars, collapse = "\n"), "\n\n")
+
+cat("Plasma variables (", length(plasma_vars), "):\n")
+cat(paste(plasma_vars, collapse = "\n"), "\n\n")
+
+cat("MMP variables (", length(mmp_vars), "):\n")
+cat(paste(mmp_vars, collapse = "\n"), "\n\n")
+
+cat("Inflammatory variables (", length(inflammatory_vars), "):\n")
+cat(paste(inflammatory_vars, collapse = "\n"), "\n\n")
+
+
+cat("Neurological variables (", length(neuro_vars), "):\n")
+cat(paste(neuro_vars, collapse = "\n"), "\n\n")
+
+# ====== 2. CORRELATION ANALYSIS FUNCTION ======
+
+create_correlation_plot <- function(data, var_list, title_text, method = "pearson", 
+                                   plot_method = "ellipse", order_method = "AOE") {
+  
+  # Select and prepare data
+  dat_sel_mat <- data %>%
+    select(all_of(var_list)) %>%
+    select(where(is.numeric)) %>%
+    as.matrix()
+  
+  # Remove variables with too many missing values (>50%)
+  missing_prop <- colSums(is.na(dat_sel_mat)) / nrow(dat_sel_mat)
+  dat_sel_mat <- dat_sel_mat[, missing_prop < 0.5, drop = FALSE]
+  
+  if (ncol(dat_sel_mat) < 2) {
+    cat("Not enough variables for correlation analysis\n")
+    return(NULL)
+  }
+  
+  # Calculate correlation matrix
+  tab_cor <- rcorr(dat_sel_mat, type = method)
+  
+  # Correlation p-values and confidence intervals
+  cor_mtest_out <- cor.mtest(mat = dat_sel_mat, conf.level = 0.95)
+  
+  # Create correlation plot
+  corrplot(
+    corr = tab_cor$r,
+    # is.corr = TRUE,
+    type = "upper",
+    # p.mat = cor_mtest_out$p,
+    method = plot_method,
+    # tl.pos = "d",
+    # tl.col = "black",
+    # tl.cex = 0.8,
+    # bg = "white",
+    # addgrid.col = "grey",
+    # addCoef.col = "black",
+    # number.cex = 0.6,
+    # mar = c(0, 0, 2, 0),
+    # title = title_text,
+    # insig = "pch",
+    order = order_method
+    # sig.level = 0.05
+  )
+  
+  return(list(correlation = tab_cor$r, p_values = tab_cor$P, data_matrix = dat_sel_mat))
+}
+
+# ====== 3. CSF-ONLY CORRELATION ANALYSIS ======
+
+cat("=== CSF-ONLY CORRELATION ANALYSIS ===\n")
+par(mfrow = c(1, 1))
+
+csf_result <- create_correlation_plot(
+  data = dat_sub_without_igg,
+  var_list = csf_vars,
+  title_text = "CSF Biomarkers Correlation Matrix",
+  method = "pearson",
+  plot_method = "ellipse"
+)
+
+# ====== 4. PLASMA-ONLY CORRELATION ANALYSIS ======
+
+cat("\n=== PLASMA-ONLY CORRELATION ANALYSIS ===\n")
+
+plasma_result <- create_correlation_plot(
+  data = dat_sub_without_igg,
+  var_list = plasma_vars,
+  title_text = "Plasma Biomarkers Correlation Matrix",
+  method = "pearson",
+  plot_method = "ellipse"
+)
+
+# ====== 5. NFL, GFAP, INFLAMMATORY vs MMPs ANALYSIS ======
+
+cat("\n=== NFL, GFAP, INFLAMMATORY vs MMPs ANALYSIS ===\n")
+
+# Combine neurological and inflammatory markers
+neuro_inflam_vars <- c(neuro_vars, inflammatory_vars)
+neuro_inflam_mmp_vars <- c(neuro_inflam_vars, mmp_vars)
+
+neuro_mmp_result <- create_correlation_plot(
+  data = dat_sub_without_igg,
+  var_list = neuro_inflam_mmp_vars,
+  title_text = "NFL, GFAP, Inflammatory vs MMPs Correlation",
+  method = "pearson",
+  plot_method = "ellipse"
+)
+
+# ====== 6. MIXED CORRELATION PLOT (using corrplot.mixed) ======
+
+cat("\n=== MIXED CORRELATION PLOT ===\n")
+
+# Create mixed correlation plot for CSF variables
+if (!is.null(csf_result)) {
+  corrplot.mixed(
+    csf_result$correlation,
+    order = 'AOE',
+    tl.pos = 'lt',
+    tl.col = 'black',
+    tl.cex = 0.7,
+    number.cex = 0.6,
+    title = "CSF Biomarkers - Mixed Correlation Plot",
+    mar = c(0, 0, 2, 0)
+  )
+}
+
+# Create mixed correlation plot for Plasma variables
+if (!is.null(plasma_result)) {
+  corrplot.mixed(
+    plasma_result$correlation,
+    order = 'AOE',
+    tl.pos = 'lt',
+    tl.col = 'black',
+    tl.cex = 0.7,
+    number.cex = 0.6,
+    title = "Plasma Biomarkers - Mixed Correlation Plot",
+    mar = c(0, 0, 2, 0)
+  )
+}
+# ====== 7. IDENTIFY STRONG CORRELATIONS ======
+
+identify_strong_correlations <- function(cor_matrix, threshold = 0.6) {
+  # Convert to data frame for easier manipulation
+  cor_df <- as.data.frame(as.table(cor_matrix))
+  names(cor_df) <- c("Var1", "Var2", "Correlation")
+  
+  # Remove self-correlations and duplicates
+  cor_df <- cor_df %>%
+    filter(Var1 != Var2) %>%
+    filter(abs(Correlation) >= threshold) %>%
+    arrange(desc(abs(Correlation)))
+  
+  # Remove duplicate pairs (A-B is same as B-A)
+  cor_df$pair <- paste(pmin(as.character(cor_df$Var1), as.character(cor_df$Var2)),
+                       pmax(as.character(cor_df$Var1), as.character(cor_df$Var2)),
+                       sep = " - ")
+  cor_df <- cor_df[!duplicated(cor_df$pair), ]
+  
+  return(cor_df)
+}
+
+# Find strong correlations in CSF data
+if (!is.null(csf_result)) {
+  strong_csf_cors <- identify_strong_correlations(csf_result$correlation, threshold = 0.6)
+  cat("Strong CSF correlations (|r| >= 0.6):\n")
+  print(strong_csf_cors[, c("Var1", "Var2", "Correlation")])
+}
+
+# Find strong correlations in plasma data
+if (!is.null(plasma_result)) {
+  strong_plasma_cors <- identify_strong_correlations(plasma_result$correlation, threshold = 0.6)
+  cat("\nStrong Plasma correlations (|r| >= 0.6):\n")
+  print(strong_plasma_cors[, c("Var1", "Var2", "Correlation")])
+}
+
+# Find strong correlations in plasma data
+if (!is.null(neuro_mmp_result)) {
+  strong_neuro_cors <- identify_strong_correlations(neuro_mmp_result$correlation, threshold = 0.6)
+  cat("\nStrong neuro correlations (|r| >= 0.6):\n")
+  print(strong_neuro_cors[, c("Var1", "Var2", "Correlation")])
+}
+
+# ====== 8. SCATTERPLOT GRID FOR STRONG CORRELATIONS ======
+
+create_scatterplot_grid <- function(data, correlation_df, max_plots = 12) {
+  # Limit to top correlations
+  correlation_df <- head(correlation_df, max_plots)
+  
+  plot_list <- list()
+  
+  for (i in 1:nrow(correlation_df)) {
+    var1 <- as.character(correlation_df$Var1[i])
+    var2 <- as.character(correlation_df$Var2[i])
+    cor_val <- round(correlation_df$Correlation[i], 3)
+    
+    # Create scatterplot
+    p <- ggplot(data, aes_string(x = var1, y = var2)) +
+      geom_point(alpha = 0.6, color = "steelblue") +
+      geom_smooth(method = "lm", se = TRUE, color = "red", size = 0.8) +
+      labs(
+        x = gsub("fl_|_log2", "", var1),
+        y = gsub("fl_|_log2", "", var2),
+        title = paste("r =", cor_val)
+      ) +
+      theme_minimal() +
+      theme(
+        axis.title = element_text(size = 8),
+        plot.title = element_text(size = 9, hjust = 0.5),
+        axis.text = element_text(size = 7)
+      )
+    
+    plot_list[[i]] <- p
+  }
+  
+  return(plot_list)
+}
+
+# Create scatterplot grids for strong correlations
+if (!is.null(csf_result) && nrow(strong_csf_cors) > 0) {
+  cat("\n=== CSF STRONG CORRELATIONS SCATTERPLOTS ===\n")
+  csf_plots <- create_scatterplot_grid(dat_sub_without_igg, strong_csf_cors, max_plots = 9)
+  grid.arrange(grobs = csf_plots, ncol = 3, top = "Strong CSF Correlations")
+}
+
+if (!is.null(plasma_result) && nrow(strong_plasma_cors) > 0) {
+  cat("\n=== PLASMA STRONG CORRELATIONS SCATTERPLOTS ===\n")
+  plasma_plots <- create_scatterplot_grid(dat_sub_without_igg, strong_plasma_cors, max_plots = 9)
+  grid.arrange(grobs = plasma_plots, ncol = 3, top = "Strong Plasma Correlations")
+}
+
+if (!is.null(neuro_mmp_result) && nrow(strong_neuro_cors) > 0) {
+  cat("\n=== Nuero STRONG CORRELATIONS SCATTERPLOTS ===\n")
+  neuro_plots <- create_scatterplot_grid(dat_sub_without_igg, strong_neuro_cors, max_plots = 9)
+  grid.arrange(grobs = neuro_plots, ncol = 3, top = "Strong neuro_mmp_result Correlations")
+}
+
+# ====== 9. SUMMARY HEATMAP WITH VALUES ======
+
+cat("\n=== SUMMARY HEATMAP WITH CORRELATION VALUES ===\n")
+
+# Create summary heatmap for all fluid variables
+all_fluid_vars <- c(csf_vars, plasma_vars)
+
+summary_result <- create_correlation_plot(
+  data = dat_sub_without_igg,
+  var_list = all_fluid_vars,
+  title_text = "All Fluid Biomarkers - Correlation Heatmap",
+  method = "pearson",
+  plot_method = "number"  # Shows correlation values
+)
+
+# ====== 10. SPECIFIC NFL/GFAP vs MMP ANALYSIS ======
+
+cat("\n=== SPECIFIC NFL/GFAP vs MMP CORRELATION ===\n")
+
+# Create specific correlation matrix for NFL/GFAP vs MMPs
+nfl_gfap_vars <- grep("nfl|gfap", names(dat_sub_without_igg), value = TRUE, ignore.case = TRUE)
+specific_vars <- c(nfl_gfap_vars, mmp_vars, inflammatory_vars)
+
+specific_result <- create_correlation_plot(
+  data = dat_sub_without_igg,
+  var_list = specific_vars,
+  title_text = "NFL/GFAP vs MMPs and Inflammatory Markers",
+  method = "pearson",
+  plot_method = "ellipse"
+)
+
+cat("Analysis complete!\n")
+cat("Key outputs:\n")
+cat("1. CSF-only correlation matrix\n")
+cat("2. Plasma-only correlation matrix\n") 
+cat("3. NFL/GFAP/Inflammatory vs MMPs correlation\n")
+cat("4. Mixed correlation plots\n")
+cat("5. Strong correlations identified\n")
+cat("6. Scatterplot grids for strong correlations\n")
+cat("7. Summary heatmap with correlation values\n")
+```
+
+
+# make pdf of all corr result
+
+Note: some correlation found 
+
+```{r}
+# 1. Open a PDF device; onefile=TRUE (the default) means multiple pages
+pdf("all_correlation_plots.pdf", width = 7, height = 7)
+
+# 2. CSF-only correlation matrix
+if (!is.null(csf_result)) {
+  corrplot(
+    corr  = csf_result$correlation,
+    type  = "upper",
+    method= "ellipse",
+    order = "AOE",
+    title = "CSF Biomarkers Correlation Matrix",
+    mar   = c(0,0,2,0)
+  )
+}
+
+# 3. Plasma-only correlation matrix
+if (!is.null(plasma_result)) {
+  corrplot(
+    corr  = plasma_result$correlation,
+    type  = "upper",
+    method= "ellipse",
+    order = "AOE",
+    title = "Plasma Biomarkers Correlation Matrix",
+    mar   = c(0,0,2,0)
+  )
+}
+
+# 4. Mixed correlation plots
+if (!is.null(csf_result)) {
+  corrplot.mixed(
+    csf_result$correlation,
+    order  = "AOE",
+    tl.pos = "lt",
+    tl.cex = 0.7,
+    number.cex = 0.6,
+    title = "CSF Biomarkers - Mixed",
+    mar   = c(0,0,2,0)
+  )
+}
+if (!is.null(plasma_result)) {
+  corrplot.mixed(
+    plasma_result$correlation,
+    order  = "AOE",
+    tl.pos = "lt",
+    tl.cex = 0.7,
+    number.cex = 0.6,
+    title = "Plasma Biomarkers - Mixed",
+    mar   = c(0,0,2,0)
+  )
+}
+
+# 5. Scatter‐plots for strong CSF correlations (one per page)
+if (exists("csf_plots")) {
+  for (p in csf_plots) {
+    print(p)
+  }
+}
+
+# 6. Scatter‐plots for strong Plasma correlations
+if (exists("plasma_plots")) {
+  for (p in plasma_plots) {
+    print(p)
+  }
+}
+
+# 7. Scatter‐plots for strong Neuro/MMP correlations
+if (exists("neuro_plots")) {
+  for (p in neuro_plots) {
+    print(p)
+  }
+}
+
+# 8. Close the device
+dev.off()
+
+```
+
+

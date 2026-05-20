@@ -1,0 +1,951 @@
+---
+title:        "Data Preparation: BBB & Inflammation Biomarker Subset"
+subtitle:     "Based on Hilmer, et al., (2022). *Blood-brain barrier disruption measured by albumin index correlates with inflammatory fluid biomarkers*"
+author:       Azadeh Golduzian
+date:         last-modified # today, now, last-modified
+date-format:  long          # full, long, medium, short, iso,   https://quarto.org/docs/reference/dates.html
+format:
+  html:
+    theme:                  litera
+    highlight-style:        atom-one
+    page-layout:            full      # article, full   # https://quarto.org/docs/output-formats/page-layout.html
+    toc:                    true
+    toc-depth:              4
+    toc-location:           body      # left, body, right
+    number-sections:        true      # true, false
+    number-depth:           3
+    code-fold:              show      # true (initially hidden), false, show (initially shown)
+    code-tools:                       # menu top-right to show/hide all code
+      toggle:               true
+      caption:              "Code"    # none
+      source:               false
+    code-overflow:          scroll    # scroll, wrap
+    code-block-bg:          true
+    code-block-border-left: "#30B0E0"
+    df-print:               paged     # default, kable, tibble, paged   # https://quarto.org/docs/computations/r.html
+fig-width:                  6
+fig-height:                 4
+execute: # https://quarto.org/docs/computations/execution-options.html, https://quarto.org/docs/computations/r.html
+  cache:    false   # false, true
+  eval:     true    # true, false  Evaluate the code chunk (if false, just echos the code into the output).
+  echo:     true    # true, false  Include the source code in output
+---
+
+<!---
+# Erik's compile commands in R:
+  setwd("D:/Dropbox/StatAcumen/consult/Authorship/2014_GaryRosenberg_UNM_NIH_VascularDementia_MRI/2024_ADRC/Analyses/202501_ADRC_Permeability")
+  fn_qmd <- "Erhardt_Rosenberg_ADRC_Fluid_Permeability_Analysis_20250219.qmd"
+  quarto::quarto_render(input = fn_qmd)
+-->
+
+```{r init, echo=FALSE}
+#options(width = 80)
+#options(warn  = -1)
+options(str   = strOptions(list.len = 1e3))
+options(knitr.kable.NA = '') # Display NAs as blanks
+my_seed <- 34567
+set.seed(my_seed)
+```
+
+--------------------------------------------------------------------------------
+
+# Next actions
+
+2/19/2025 Comparison presentation:
+
+<https://docs.google.com/presentation/d/10neeggTjkKFs3SFFL9hJXMTKkTZ0W43RY4E2Myppx1o/edit#slide=id.g33159024d0d_0_357>
+
+
+
+--------------------------------------------------------------------------------
+
+# Data preliminaries
+
+```{r chunk-003}
+library(erikmisc)
+library(tidyverse)
+library(labelled)
+library(corrplot)
+library(broom)
+library(dunn.test)
+library(ggpubr)
+# devtools::install_github("vincentarelbundock/modelsummary")
+library(modelsummary)
+  
+#dir.create("out_new")
+```
+
+## Subset data
+
+```{r chunk-004}
+# load("../../Data/Sweden.RData")
+# dat_sweden <-
+#   dat_all |>
+#   dplyr::select(
+#     demo_study_id
+#   , tidyselect::starts_with("fl_")
+#   , -tidyselect::ends_with("_log2")
+#   ) |>
+#   dplyr::mutate(
+#     I_Sweden    = TRUE
+#   , ID          = 20000 + 1:dplyr::n()
+#   , dx_current  = "Sweden"
+#   ) |>
+#   dplyr::rowwise() |>
+#   dplyr::mutate(
+#     prop_complete = mean(!is.na(dplyr::across(tidyselect::everything())))
+#   ) |>
+#   dplyr::ungroup()
+# rm(dat_all)
+# # e_plot_missing(dat_sweden)
+
+Var <- list()
+Var$ID <-
+  c(
+    "ptid"
+  )
+
+Var$DX <-
+  c(
+    "dx_current"     # placeholder, var not selected based on this
+   # "dx_biological"  # analysis does use dx_biological
+  )
+
+Var$demo <-
+  c(
+    "sex"
+  , "demo_edu_yrs"
+  , "age"
+  )
+
+Var$csf <-
+  c(
+
+  ##### CSF
+
+  #, "fl_csf_glucose_log2"
+  #, "fl_csf_total_protein_log2"
+  #, "fl_csf_rbc_log2"
+  #, "fl_csf_tnc_log2"
+  #, "fl_csf_igg_log2"
+
+    "fl_albumin_index_log2"
+  #, "fl_csf_albumin_log2"
+
+  , "fl_igg_index_log2"
+
+  , "fl_csf_igg_log2"
+  #, "fl_csf_igg_synthesis_log2"
+
+  #, "fl_zym_csf_mmp_2_72_kda_log2"
+  #, "fl_zym_csf_mmp_2_62_kda_log2"
+  #, "fl_zym_csf_mmp_2_92_kda_log2"
+  #, "fl_zym_csf_mmp_2_84_kda_log2"
+  , "fl_msd_csf_mmp_1_log2"
+  , "fl_msd_csf_mmp_2_log2"
+  , "fl_msd_csf_mmp_3_log2"
+  , "fl_msd_csf_mmp_9_log2"
+  #, "fl_msd_csf_mmp_10_log2"
+  , "fl_csf__ALL__mmp_10_log2"
+  #, "fl_msd_csf_2plex_mmp_2_log2"
+  #, "fl_msd_csf_2plex_mmp_10_log2"
+
+  , "fl_angio_csf_bfgf_log2"
+  , "fl_angio_csf_flt_1_log2"
+  #, "fl_angio_csf_plgf_log2"
+  , "fl_angio_csf_tie2_log2"
+  , "fl_angio_csf_vegf_a_log2"
+  , "fl_angio_csf_vegf_c_log2"
+  , "fl_angio_csf_vegf_d_log2"
+
+  , "fl_cyto_csf_ifn_g_log2"
+  , "fl_csf__ALL__il_1b_log2"
+  #, "fl_cyto_csf_il_1b_log2"
+  #, "fl_simoa_csf_il_1b_log2"
+  , "fl_cyto_csf_il_2_log2"
+  , "fl_cyto_csf_il_4_log2"
+  , "fl_cyto_csf_il_6_log2"
+  , "fl_cyto_csf_il_8_log2"
+  , "fl_cyto_csf_il_10_log2"
+  , "fl_cyto_csf_il_12p70_log2"
+  , "fl_cyto_csf_il_13_log2"
+  , "fl_cyto_csf_tnf_a_log2"
+
+  , "fl_csf__ALL__nfl_log2"
+  #, "fl_simoa_csf_nfl_log2"
+  , "fl_csf__ALL__plgf_log2"
+  #, "fl_simoa_csf_plgf_log2"
+  , "fl_csf__ALL__gfap_log2"
+  #, "fl_simoa_csf_n4pe_gfap_log2"
+  #, "fl_simoa_csf_n4pe_nfl_log2"
+  #, "fl_simoa_csf_n2pb_gfap_log2"
+  #, "fl_simoa_csf_n2pb_nfl_log2"
+  , "fl_abeta_4240_ratio_log2"
+  #, "fl_csf__ALL__abeta_40_log2"
+  #, "fl_csf__ALL__abeta_42_log2"
+  #, "fl_simoa_csf_n4pe_abeta_40_original_log2"
+  #, "fl_simoa_csf_n4pe_abeta_40_log2"
+  #, "fl_simoa_csf_n4pe_abeta_42_log2"
+  , "fl_csf__ALL__ptau_log2"
+  #, "fl_simoa_csf_ptau_v2_original_log2"
+  #, "fl_simoa_csf_ptau_v2_log2"
+  #, "fl_simoa_csf_ptau_v2_1_log2"
+
+  , "fl_myelin_basic_protein_log2"
+  )
+
+Var$plasma <-
+  c(
+  ##### Plasma
+
+    "fl_serum_igg_log2"
+
+  , "fl_plasma__ALL__mmp_1_log2"
+  , "fl_plasma__ALL__mmp_2_log2"
+  , "fl_plasma__ALL__mmp_3_log2"
+  , "fl_plasma__ALL__mmp_9_log2"
+  , "fl_plasma__ALL__mmp_10_log2"
+
+  , "fl_plasma__ALL__bfgf_log2"
+  , "fl_plasma__ALL__flt_1_log2"
+  , "fl_plasma__ALL__tie2_log2"
+  , "fl_plasma__ALL__vegf_a_log2"
+  , "fl_plasma__ALL__vegf_c_log2"
+  , "fl_plasma__ALL__vegf_d_log2"
+
+  #, "fl_zym_plasma_mmp_2_72_kda_log2"
+  #, "fl_zym_plasma_mmp_2_62_kda_log2"
+  #, "fl_zym_plasma_mmp_2_92_kda_log2"
+  #, "fl_zym_plasma_mmp_2_84_kda_log2"
+  #, "fl_msd_plasma_mmp_1_log2"
+  #, "fl_msd_plasma_mmp_2_log2"
+  #, "fl_msd_plasma_mmp_3_log2"
+  #, "fl_msd_plasma_mmp_9_log2"
+  #, "fl_msd_plasma_mmp_10_log2"
+  #, "fl_simoa_heparin_plasma_il_1b_log2"
+  #, "fl_simoa_heparin_plasma_nfl_log2"
+  #, "fl_simoa_edta_plasma_ptau_v2_log2"
+  #, "fl_simoa_edta_plasma_ptau_v2_1_log2"
+  #, "fl_simoa_edta_plasma_ptau_217_v2_log2"
+  #, "fl_simoa_heparin_plasma_ptau_v2_log2"
+  #, "fl_simoa_edta_plasma_n4pe_abeta_40_log2"
+  #, "fl_simoa_edta_plasma_n4pe_abeta_42_log2"
+  #, "fl_simoa_edta_plasma_n4pe_gfap_log2"
+  #, "fl_simoa_edta_plasma_n4pe_nfl_log2"
+  #, "fl_simoa_heparin_plasma_n4pe_abeta_40_log2"
+  #, "fl_simoa_heparin_plasma_n4pe_abeta_42_log2"
+  #, "fl_simoa_heparin_plasma_n4pe_gfap_log2"
+  #, "fl_simoa_heparin_plasma_n4pe_nfl_log2"
+  #, "fl_simoa_edta_plasma_ptau_v2_ncrad_log2"
+  #, "fl_simoa_edta_plasma_ptau_v2_1_ncrad_log2"
+  #, "fl_simoa_edta_plasma_n4pe_abeta_40_ncrad_log2"
+  #, "fl_simoa_edta_plasma_n4pe_abeta_42_ncrad_log2"
+  #, "fl_simoa_edta_plasma_n4pe_gfap_ncrad_log2"
+  #, "fl_simoa_edta_plasma_n4pe_nfl_ncrad_log2"
+  #, "fl_simoa_edta_plasma_n2pb_gfap_ncrad_log2"
+  #, "fl_simoa_edta_plasma_n2pb_nfl_ncrad_log2"
+  #, "fl_simoa_edta_plasma_ptau_217_v2_ncrad_log2"
+  #, "fl_lumipulse_edta_plasma_abeta_40_ncrad_log2"
+  #, "fl_lumipulse_edta_plasma_abeta_42_ncrad_log2"
+  #, "fl_msd_heparin_plasma_2plex_mmp_2_log2"
+  #, "fl_msd_heparin_plasma_2plex_mmp_10_log2"
+  #, "fl_msd_edta_plasma_2plex_mmp_2_log2"
+  #, "fl_msd_edta_plasma_2plex_mmp_10_log2"
+  #, "fl_msd_heparin_plasma_3plex_mmp_1_log2"
+  #, "fl_msd_heparin_plasma_3plex_mmp_3_log2"
+  #, "fl_msd_heparin_plasma_3plex_mmp_9_log2"
+  #, "fl_msd_edta_plasma_3plex_mmp_1_log2"
+  #, "fl_msd_edta_plasma_3plex_mmp_3_log2"
+  #, "fl_msd_edta_plasma_3plex_mmp_9_log2"
+  #, "fl_msd_heparin_plasma_mmp_2_log2"
+  #, "fl_msd_edta_plasma_mmp_2_log2"
+  #, "fl_msd_heparin_plasma_mmp_10_log2"
+  #, "fl_msd_edta_plasma_mmp_10_log2"
+  #, "fl_angio_heparin_plasma_bfgf_log2"
+  #, "fl_angio_heparin_plasma_flt_1_log2"
+  #, "fl_angio_heparin_plasma_plgf_log2"
+  #, "fl_angio_heparin_plasma_tie2_log2"
+  #, "fl_angio_heparin_plasma_vegf_a_log2"
+  #, "fl_angio_heparin_plasma_vegf_c_log2"
+  #, "fl_angio_heparin_plasma_vegf_d_log2"
+  #, "fl_angio_edta_plasma_bfgf_log2"
+  #, "fl_angio_edta_plasma_flt_1_log2"
+  #, "fl_angio_edta_plasma_plgf_log2"
+  #, "fl_angio_edta_plasma_tie2_log2"
+  #, "fl_angio_edta_plasma_vegf_a_log2"
+  #, "fl_angio_edta_plasma_vegf_c_log2"
+  #, "fl_angio_edta_plasma_vegf_d_log2"
+  , "fl_cyto_heparin_plasma_ifn_g_log2"
+  , "fl_plasma__ALL__il_1b_log2"
+  #, "fl_cyto_heparin_plasma_il_1b_log2"
+  , "fl_cyto_heparin_plasma_il_2_log2"
+  , "fl_cyto_heparin_plasma_il_4_log2"
+  , "fl_cyto_heparin_plasma_il_6_log2"
+  , "fl_cyto_heparin_plasma_il_8_log2"
+  , "fl_cyto_heparin_plasma_il_10_log2"
+  , "fl_cyto_heparin_plasma_il_12p70_log2"
+  , "fl_cyto_heparin_plasma_il_13_log2"
+  , "fl_cyto_heparin_plasma_tnf_a_log2"
+  #, "fl_simoa_heparin_plasma_n2pb_nfl_log2"
+  #, "fl_simoa_heparin_plasma_n2pb_gfap_log2"
+  #, "fl_simoa_heparin_plasma_ptau_217_v2_log2"
+  #, "fl_simoa_edta_plasma_ptau_v2_original_log2"
+  #, "fl_simoa_heparin_plasma_ptau_v2_original_log2"
+  #, "fl_simoa_edta_plasma_ptau_v2_1_ncrad_original_log2"
+  #, "fl_simoa_edta_plasma_ptau_v2_ncrad_original_log2"
+  #, "fl_lumipulse_edta_plasma_abeta_40_ncrad_original_log2"
+  #, "fl_simoa_heparin_plasma_n4pe_abeta_40_original_log2"
+  #, "fl_lumipulse_edta_plasma_abeta_42_ncrad_original_log2"
+  #, "fl_msd_heparin_plasma_mmp_2_original_log2"
+
+  , "fl_plasma__ALL__nfl_log2"
+  , "fl_plasma__ALL__plgf_log2"
+  , "fl_plasma__ALL__gfap_log2"
+
+  , "fl_plasma__ALL__abeta_40_log2"
+  , "fl_plasma__ALL__abeta_42_log2"
+  , "fl_plasma__ALL__ptau_181_log2"
+  , "fl_plasma__ALL__ptau_217_log2"
+  )
+
+Var$mri <-
+  c(
+  ##### MRI
+
+  #, "mri_complete"
+  #, "mri_date"
+  #, "mri_ursi"
+  #, "mri_trans_date"
+  #, "mri_vol_intracranial_mm3"
+  #, "mri_vol_wm"
+  #, "mri_vol_gm"
+  #, "mri_vol_total_brain"
+  #, "mri_vol_atrophy"
+  #, "mri_vol_hippocampal"
+  #, "mri_fraction_vol_hippocampal"
+    "mri_percent_vol_hippo"
+  #, "mri_ucd_vol_gm"
+  #, "mri_ucd_vol_wm"
+  #, "mri_ucd_vol_icv"
+  #, "mri_ucd_vol_csf"
+  #, "mri_ucd_vol_wmh"
+#  , "mri_ucd_wmhv_percent"  # 2/19/2025 too few observations
+  #, "mri_ucd_wmhv_z"
+  #, "mri_vds"
+  , "mri_mean_cort_thick_mm"
+  #, "mri_medtemp_cort_thick_mm"
+  #, "mri_inftemp_cort_thick_mm"
+  #, "mri_temppole_cort_thick_mm"
+  #, "mri_supfrontgyrus_cort_thick_mm"
+  #, "mri_anggyrus_cort_thick_mm"
+  #, "mri_supparietal_cort_thick_mm"
+  #, "mri_supramarginal_cort_thick_mm"
+  #, "mri_precuneus_cort_thick_mm"
+  #, "mri_inffrontalsulcus_cort_thick_mm"
+  #, "mri_visual_cort_thickness_mm"
+  #, "mri_permeability"
+  , "mri_perm_3t_tot"
+  #, "mri_microbleeds"
+  #, "mri_dti_bvalue"
+  , "mri_dti_psmd"
+  #, "mri_dti_psmd_z"
+  , "mri_dti_freewater_mean"
+  #, "mri_dti_freewater_z"
+  #, "mri_cbf"
+  #, "mri_comments"
+  #, "mri_rad_report_description"
+  #, "mri_internal_complete"
+  #, "mri_vol_lesion"
+  #, "mri_vol_wm_jim"
+  #, "mri_percent_wmh_vol"
+  #, "mri_spectroscopy"
+  #, "mri_spectroscopy_cr_mrs"
+  #, "mri_spectroscopy_gln"
+  #, "mri_spectroscopy_glu"
+  #, "mri_spectroscopy_ins"
+  #, "mri_spectroscopy_naa"
+  #, "mri_spectroscopy_naa_naag"
+  #, "mri_spectroscopy_cho_gpc_pch"
+  #, "mri_spectroscopy_cr_pcr"
+  #, "mri_spectroscopy_glu_gln"
+  #, "mri_perm_15t_mean_brain_ki"
+  #, "mri_perm_15t_tot_ki"
+  #, "mri_dti_fabnormal_z"
+  #, "mri_dti_histpk_z"
+  #, "mri_vol_intracranial_mm3_log2"
+  #, "mri_vol_wm_log2"
+  #, "mri_vol_gm_log2"
+  #, "mri_vol_total_brain_log2"
+  #, "mri_vol_atrophy_log2"
+  #, "mri_vol_hippocampal_log2"
+  #, "mri_fraction_vol_hippocampal_log2"
+  #, "mri_percent_vol_hippo_log2"
+  #, "mri_ucd_vol_gm_log2"
+  #, "mri_ucd_vol_wm_log2"
+  #, "mri_ucd_vol_icv_log2"
+  #, "mri_ucd_vol_csf_log2"
+  #, "mri_ucd_vol_wmh_log2"
+  #, "mri_ucd_wmhv_percent_log2"
+  #, "mri_ucd_wmhv_z_log2"
+  #, "mri_vds_log2"
+  #, "mri_mean_cort_thick_mm_log2"
+  #, "mri_medtemp_cort_thick_mm_log2"
+  #, "mri_inftemp_cort_thick_mm_log2"
+  #, "mri_temppole_cort_thick_mm_log2"
+  #, "mri_supfrontgyrus_cort_thick_mm_log2"
+  #, "mri_anggyrus_cort_thick_mm_log2"
+  #, "mri_supparietal_cort_thick_mm_log2"
+  #, "mri_supramarginal_cort_thick_mm_log2"
+  #, "mri_precuneus_cort_thick_mm_log2"
+  #, "mri_inffrontalsulcus_cort_thick_mm_log2"
+  #, "mri_visual_cort_thickness_mm_log2"
+  #, "mri_perm_3t_tot_log2"
+  #, "mri_dti_psmd_log2"
+  #, "mri_dti_psmd_z_log2"
+  #, "mri_dti_freewater_mean_log2"
+  #, "mri_dti_freewater_z_log2"
+  #, "mri_vol_lesion_log2"
+  #, "mri_percent_wmh_vol_log2"
+  #, "mri_spectroscopy_cr_mrs_log2"
+  #, "mri_spectroscopy_gln_log2"
+  #, "mri_spectroscopy_glu_log2"
+  #, "mri_spectroscopy_ins_log2"
+  #, "mri_spectroscopy_naa_log2"
+  #, "mri_spectroscopy_naa_naag_log2"
+  #, "mri_spectroscopy_cho_gpc_pch_log2"
+  #, "mri_spectroscopy_cr_pcr_log2"
+  #, "mri_spectroscopy_glu_gln_log2"
+  #, "mri_perm_15t_mean_brain_ki_log2"
+  #, "mri_perm_15t_tot_ki_log2"
+  #, "mri_dti_fabnormal_z_log2"
+  #, "mri_dti_histpk_z_log2"
+  #, "I_VCI"
+  #, "ID"
+  )
+
+dat_var_label_matching <-
+  tibble::tribble(
+    ~Var                                    , ~Group  , ~Type                          , ~Scale
+  #, "ptid"                                 ,         ,                                ,
+  #, "dx_current"                           ,         ,                                ,
+  #, "sex"                                  ,         ,                                ,
+  #, "demo_edu_yrs"                         ,         ,                                ,
+  #, "age"                                  ,         ,                                ,
+  ##### CSF                                 ,         ,                                ,
+  , "fl_albumin_index_log2"                 , "CSF"   , "CSF Permeability"             , "log2"
+  , "fl_igg_index_log2"                     , "CSF"   , "CSF Other"                    , "log2"
+  , "fl_csf_igg_log2"                       , "CSF"   , "CSF Other"                    , "log2"
+  , "fl_msd_csf_mmp_1_log2"                 , "CSF"   , "CSF MMP"                      , "log2"
+  , "fl_msd_csf_mmp_2_log2"                 , "CSF"   , "CSF MMP"                      , "log2"
+  , "fl_msd_csf_mmp_3_log2"                 , "CSF"   , "CSF MMP"                      , "log2"
+  , "fl_msd_csf_mmp_9_log2"                 , "CSF"   , "CSF MMP"                      , "log2"
+  , "fl_csf__ALL__mmp_10_log2"              , "CSF"   , "CSF MMP"                      , "log2"
+  , "fl_angio_csf_bfgf_log2"                , "CSF"   , "CSF Angiogenic Factors"       , "log2"
+  , "fl_angio_csf_flt_1_log2"               , "CSF"   , "CSF Angiogenic Factors"       , "log2"
+  , "fl_angio_csf_tie2_log2"                , "CSF"   , "CSF Angiogenic Factors"       , "log2"
+  , "fl_angio_csf_vegf_a_log2"              , "CSF"   , "CSF Angiogenic Factors"       , "log2"
+  , "fl_angio_csf_vegf_c_log2"              , "CSF"   , "CSF Angiogenic Factors"       , "log2"
+  , "fl_angio_csf_vegf_d_log2"              , "CSF"   , "CSF Angiogenic Factors"       , "log2"
+  , "fl_cyto_csf_ifn_g_log2"                , "CSF"   , "CSF Cytokines"                , "log2"
+  , "fl_csf__ALL__il_1b_log2"               , "CSF"   , "CSF Cytokines"                , "log2"
+  , "fl_cyto_csf_il_2_log2"                 , "CSF"   , "CSF Cytokines"                , "log2"
+  , "fl_cyto_csf_il_4_log2"                 , "CSF"   , "CSF Cytokines"                , "log2"
+  , "fl_cyto_csf_il_6_log2"                 , "CSF"   , "CSF Cytokines"                , "log2"
+  , "fl_cyto_csf_il_8_log2"                 , "CSF"   , "CSF Cytokines"                , "log2"
+  , "fl_cyto_csf_il_10_log2"                , "CSF"   , "CSF Cytokines"                , "log2"
+  , "fl_cyto_csf_il_12p70_log2"             , "CSF"   , "CSF Cytokines"                , "log2"
+  , "fl_cyto_csf_il_13_log2"                , "CSF"   , "CSF Cytokines"                , "log2"
+  , "fl_cyto_csf_tnf_a_log2"                , "CSF"   , "CSF Cytokines"                , "log2"
+  , "fl_csf__ALL__nfl_log2"                 , "CSF"   , "CSF Other"                    , "log2"
+  , "fl_csf__ALL__plgf_log2"                , "CSF"   , "CSF Other"                    , "log2"
+  , "fl_csf__ALL__gfap_log2"                , "CSF"   , "CSF Other"                    , "log2"
+  , "fl_abeta_4240_ratio_log2"              , "CSF"   , "CSF AD"                       , "log2"
+  , "fl_csf__ALL__ptau_log2"                , "CSF"   , "CSF AD"                       , "log2"
+  , "fl_myelin_basic_protein_log2"          , "CSF"   , "CSF Other"                    , "log2"
+  ##### Plasma                              ,         ,                                ,
+  , "fl_serum_igg_log2"                     , "Plasma", "Plasma Other"                 , "log2"
+  , "fl_plasma__ALL__mmp_1_log2"            , "Plasma", "Plasma MMP"                   , "log2"
+  , "fl_plasma__ALL__mmp_2_log2"            , "Plasma", "Plasma MMP"                   , "log2"
+  , "fl_plasma__ALL__mmp_3_log2"            , "Plasma", "Plasma MMP"                   , "log2"
+  , "fl_plasma__ALL__mmp_9_log2"            , "Plasma", "Plasma MMP"                   , "log2"
+  , "fl_plasma__ALL__mmp_10_log2"           , "Plasma", "Plasma MMP"                   , "log2"
+  , "fl_plasma__ALL__bfgf_log2"             , "Plasma", "Plasma Angiogenic Factors"    , "log2"
+  , "fl_plasma__ALL__flt_1_log2"            , "Plasma", "Plasma Angiogenic Factors"    , "log2"
+  , "fl_plasma__ALL__tie2_log2"             , "Plasma", "Plasma Angiogenic Factors"    , "log2"
+  , "fl_plasma__ALL__vegf_a_log2"           , "Plasma", "Plasma Angiogenic Factors"    , "log2"
+  , "fl_plasma__ALL__vegf_c_log2"           , "Plasma", "Plasma Angiogenic Factors"    , "log2"
+  , "fl_plasma__ALL__vegf_d_log2"           , "Plasma", "Plasma Angiogenic Factors"    , "log2"
+  , "fl_cyto_heparin_plasma_ifn_g_log2"     , "Plasma", "Plasma Cytokines"             , "log2"
+  , "fl_plasma__ALL__il_1b_log2"            , "Plasma", "Plasma Cytokines"             , "log2"
+  , "fl_cyto_heparin_plasma_il_2_log2"      , "Plasma", "Plasma Cytokines"             , "log2"
+  , "fl_cyto_heparin_plasma_il_4_log2"      , "Plasma", "Plasma Cytokines"             , "log2"
+  , "fl_cyto_heparin_plasma_il_6_log2"      , "Plasma", "Plasma Cytokines"             , "log2"
+  , "fl_cyto_heparin_plasma_il_8_log2"      , "Plasma", "Plasma Cytokines"             , "log2"
+  , "fl_cyto_heparin_plasma_il_10_log2"     , "Plasma", "Plasma Cytokines"             , "log2"
+  , "fl_cyto_heparin_plasma_il_12p70_log2"  , "Plasma", "Plasma Cytokines"             , "log2"
+  , "fl_cyto_heparin_plasma_il_13_log2"     , "Plasma", "Plasma Cytokines"             , "log2"
+  , "fl_cyto_heparin_plasma_tnf_a_log2"     , "Plasma", "Plasma Cytokines"             , "log2"
+  , "fl_plasma__ALL__nfl_log2"              , "Plasma", "Plasma Other"                 , "log2"
+  , "fl_plasma__ALL__plgf_log2"             , "Plasma", "Plasma Other"                 , "log2"
+  , "fl_plasma__ALL__gfap_log2"             , "Plasma", "Plasma Other"                 , "log2"
+  , "fl_plasma__ALL__abeta_40_log2"         , "Plasma", "Plasma AD"                    , "log2"
+  , "fl_plasma__ALL__abeta_42_log2"         , "Plasma", "Plasma AD"                    , "log2"
+  , "fl_plasma__ALL__ptau_181_log2"         , "Plasma", "Plasma AD"                    , "log2"
+  , "fl_plasma__ALL__ptau_217_log2"         , "Plasma", "Plasma AD"                    , "log2"
+  ##### MRI                                 ,         ,                                ,
+  , "mri_percent_vol_hippo"                 , "MRI"   , "MRI Other"                    , "org"
+  # , "mri_ucd_wmhv_percent"                  , "MRI"   , "MRI Other"                    , "org"  # 2/19/2025 too few observations
+  , "mri_mean_cort_thick_mm"                , "MRI"   , "MRI Other"                    , "org"
+  , "mri_perm_3t_tot"                       , "MRI"   , "MRI Other"                    , "org"
+  , "mri_dti_psmd"                          , "MRI"   , "MRI Other"                    , "org"
+  , "mri_dti_freewater_mean"                , "MRI"   , "MRI Other"                    , "org"
+  )
+
+
+
+# dx_tokeep <-
+#   c("LA", "Mixed", "SIVD", "AD", "SVD")
+
+
+# ── SIMULATED DATA (portfolio version) ────────────────────────────────────────
+# Real data: UNM ADRC clinical dataset (restricted access, not included here).
+# The block below reproduces the variable structure and scale of the real dataset.
+# Replace this block with load("ADRC_VCI_MarkVCID2_ALL_combine.RData") when
+# running with the actual data.
+# ──────────────────────────────────────────────────────────────────────────────
+set.seed(42)
+n_sim <- 180
+sim_log2     <- function(n, mean = 5, sd = 1.2) rnorm(n, mean, sd)
+add_missing  <- function(x, prop = 0.20) { x[sample(length(x), floor(prop*length(x)))] <- NA; x }
+
+dx_levels        <- c("AD", "LA", "Mixed", "SIVD")
+redcap_baselines <- c("Baseline (Arm 1: Patients)", "Baseline (Arm 2: Control)",
+                      "Baseline (Arm 3: CSF controls)", "Initial Visit (Arm 1: Arm 1)")
+
+dat_all <- tibble(
+  ptid              = paste0(sample(c("ADRC","UNM","VCI"), n_sim, replace=TRUE), "-", sprintf("%03d", 1:n_sim)),
+  dx_current        = sample(dx_levels, n_sim, replace=TRUE) |> factor(levels=dx_levels),
+  dx_biological     = sample(dx_levels, n_sim, replace=TRUE) |> factor(levels=dx_levels),
+  redcap_event_name = sample(redcap_baselines, n_sim, replace=TRUE),
+  sex               = sample(c("Female","Male"), n_sim, replace=TRUE),
+  demo_edu_yrs      = round(rnorm(n_sim, 15, 3)),
+  age               = round(rnorm(n_sim, 72, 8), 1),
+  # Neuropsych
+  npsy_executive_t  = add_missing(rnorm(n_sim, 50, 10)),
+  npsy_attention_t  = add_missing(rnorm(n_sim, 50, 10)),
+  npsy_memory_t     = add_missing(rnorm(n_sim, 45, 12)),
+  npsy_language_t   = add_missing(rnorm(n_sim, 50, 10)),
+  # CSF
+  fl_albumin_index_log2        = add_missing(sim_log2(n_sim, 4.2, 1.0)),
+  fl_igg_index_log2            = add_missing(sim_log2(n_sim)),
+  fl_csf_igg_log2              = add_missing(sim_log2(n_sim)),
+  fl_msd_csf_mmp_1_log2        = add_missing(sim_log2(n_sim)),
+  fl_msd_csf_mmp_2_log2        = add_missing(sim_log2(n_sim)),
+  fl_msd_csf_mmp_3_log2        = add_missing(sim_log2(n_sim)),
+  fl_msd_csf_mmp_9_log2        = add_missing(sim_log2(n_sim)),
+  fl_csf__ALL__mmp_10_log2     = add_missing(sim_log2(n_sim)),
+  fl_angio_csf_bfgf_log2       = add_missing(sim_log2(n_sim)),
+  fl_angio_csf_flt_1_log2      = add_missing(sim_log2(n_sim)),
+  fl_angio_csf_tie2_log2       = add_missing(sim_log2(n_sim)),
+  fl_angio_csf_vegf_a_log2     = add_missing(sim_log2(n_sim)),
+  fl_angio_csf_vegf_c_log2     = add_missing(sim_log2(n_sim)),
+  fl_angio_csf_vegf_d_log2     = add_missing(sim_log2(n_sim)),
+  fl_cyto_csf_ifn_g_log2       = add_missing(sim_log2(n_sim)),
+  fl_csf__ALL__il_1b_log2      = add_missing(sim_log2(n_sim)),
+  fl_cyto_csf_il_2_log2        = add_missing(sim_log2(n_sim)),
+  fl_cyto_csf_il_4_log2        = add_missing(sim_log2(n_sim)),
+  fl_cyto_csf_il_6_log2        = add_missing(sim_log2(n_sim)),
+  fl_cyto_csf_il_8_log2        = add_missing(sim_log2(n_sim)),
+  fl_cyto_csf_il_10_log2       = add_missing(sim_log2(n_sim)),
+  fl_cyto_csf_il_12p70_log2    = add_missing(sim_log2(n_sim)),
+  fl_cyto_csf_il_13_log2       = add_missing(sim_log2(n_sim)),
+  fl_cyto_csf_tnf_a_log2       = add_missing(sim_log2(n_sim)),
+  fl_csf__ALL__nfl_log2        = add_missing(sim_log2(n_sim)),
+  fl_csf__ALL__plgf_log2       = add_missing(sim_log2(n_sim)),
+  fl_csf__ALL__gfap_log2       = add_missing(sim_log2(n_sim)),
+  fl_abeta_4240_ratio_log2     = add_missing(sim_log2(n_sim, 3.5, 0.8)),
+  fl_csf__ALL__ptau_log2       = add_missing(sim_log2(n_sim, 4.0, 1.1)),
+  fl_myelin_basic_protein_log2 = add_missing(sim_log2(n_sim)),
+  # Plasma
+  fl_serum_igg_log2                    = add_missing(sim_log2(n_sim)),
+  fl_plasma__ALL__mmp_1_log2           = add_missing(sim_log2(n_sim)),
+  fl_plasma__ALL__mmp_2_log2           = add_missing(sim_log2(n_sim)),
+  fl_plasma__ALL__mmp_3_log2           = add_missing(sim_log2(n_sim)),
+  fl_plasma__ALL__mmp_9_log2           = add_missing(sim_log2(n_sim)),
+  fl_plasma__ALL__mmp_10_log2          = add_missing(sim_log2(n_sim)),
+  fl_plasma__ALL__bfgf_log2            = add_missing(sim_log2(n_sim)),
+  fl_plasma__ALL__flt_1_log2           = add_missing(sim_log2(n_sim)),
+  fl_plasma__ALL__tie2_log2            = add_missing(sim_log2(n_sim)),
+  fl_plasma__ALL__vegf_a_log2          = add_missing(sim_log2(n_sim)),
+  fl_plasma__ALL__vegf_c_log2          = add_missing(sim_log2(n_sim)),
+  fl_plasma__ALL__vegf_d_log2          = add_missing(sim_log2(n_sim)),
+  fl_cyto_heparin_plasma_ifn_g_log2    = add_missing(sim_log2(n_sim)),
+  fl_plasma__ALL__il_1b_log2           = add_missing(sim_log2(n_sim)),
+  fl_cyto_heparin_plasma_il_2_log2     = add_missing(sim_log2(n_sim)),
+  fl_cyto_heparin_plasma_il_4_log2     = add_missing(sim_log2(n_sim)),
+  fl_cyto_heparin_plasma_il_6_log2     = add_missing(sim_log2(n_sim)),
+  fl_cyto_heparin_plasma_il_8_log2     = add_missing(sim_log2(n_sim)),
+  fl_cyto_heparin_plasma_il_10_log2    = add_missing(sim_log2(n_sim)),
+  fl_cyto_heparin_plasma_il_12p70_log2 = add_missing(sim_log2(n_sim)),
+  fl_cyto_heparin_plasma_il_13_log2    = add_missing(sim_log2(n_sim)),
+  fl_cyto_heparin_plasma_tnf_a_log2    = add_missing(sim_log2(n_sim)),
+  fl_plasma__ALL__nfl_log2             = add_missing(sim_log2(n_sim)),
+  fl_plasma__ALL__plgf_log2            = add_missing(sim_log2(n_sim)),
+  fl_plasma__ALL__gfap_log2            = add_missing(sim_log2(n_sim)),
+  fl_plasma__ALL__abeta_40_log2        = add_missing(sim_log2(n_sim, 3.5, 0.8)),
+  fl_plasma__ALL__abeta_42_log2        = add_missing(sim_log2(n_sim, 3.2, 0.9)),
+  fl_plasma__ALL__ptau_181_log2        = add_missing(sim_log2(n_sim, 4.1, 1.0)),
+  fl_plasma__ALL__ptau_217_log2        = add_missing(sim_log2(n_sim, 3.8, 1.1)),
+  # MRI
+  mri_percent_vol_hippo    = add_missing(rnorm(n_sim, 0.25,   0.05)),
+  mri_mean_cort_thick_mm   = add_missing(rnorm(n_sim, 2.5,    0.3)),
+  mri_perm_3t_tot          = add_missing(pmax(0, rnorm(n_sim, 0.002, 0.001))),
+  mri_perm_3t_tot_log2     = add_missing(rnorm(n_sim, -9,     1.5)),
+  mri_dti_psmd             = add_missing(rnorm(n_sim, 0.002,  0.0005)),
+  mri_dti_freewater_mean   = add_missing(rnorm(n_sim, 0.18,   0.04))
+)
+# ── END SIMULATED DATA ────────────────────────────────────────────────────────
+
+dat_all <-
+  dat_all |>
+  dplyr::select(
+    tidyselect::all_of(as.character(unlist(Var)))
+  , dx_biological
+  , redcap_event_name
+  , npsy_executive_t,
+  , npsy_attention_t
+  , npsy_memory_t
+  , npsy_language_t
+  , mri_perm_3t_tot_log2
+  ) |>
+  dplyr::select(
+    -dx_current
+  ) |>
+  dplyr::rename(
+    dx_current = dx_biological
+  ) |>
+  dplyr::filter(
+  #  dx_current %in% dx_tokeep    ## comment for all observations
+  ) %>%
+  dplyr::mutate(
+    I_VCI       = TRUE
+  , ID          = 10000 + 1:dplyr::n()
+  , dx_current  = dx_current |> fct_recode(SIVD = "SVD")
+  , dx_current  = dx_current |> factor()
+  #, dx_current  = dx_current |> as.character()
+  )
+
+
+  #
+  #|>
+  ## dplyr::filter(
+  ##   dx_current %in% c("Control", "LA", "AD", "SIVD", "Mixed")
+  ## ) |>
+  #dplyr::rowwise() |>
+  #dplyr::mutate(
+  #  prop_complete = mean(!is.na(dplyr::across(tidyselect::everything())))
+  #) |>
+  #dplyr::ungroup()
+
+#hist(dat_all$prop_complete, 100)
+
+# keeping records with at least a proportion not NA, will impute NAs
+# dat_all <-
+#   dat_all |>
+#   dplyr::filter(
+#     VCI_prop_complete >= 0.6
+#   )
+
+# CSF labels
+#labelled::var_label(dat_all$fl_abeta_4240_ratio) <-
+#  paste0(
+#    "CSF "
+#  , labelled::var_label(dat_all$fl_abeta_4240_ratio)
+#  )
+#labelled::var_label(dat_all$fl_ptau) <-
+#  paste0(
+#    "CSF "
+#  , labelled::var_label(dat_all$fl_ptau)
+#  )
+
+#e_plot_missing(
+#    dat_plot       = dat_all
+#  , var_group      = "dx_current"
+#  , sw_group_sort  = TRUE
+#  , var2_sort      = "prop_complete"
+#  )
+
+
+# # log2 versions
+# for (n_var in str_subset(names(dat_all), pattern = "^fl_")) {
+#   dat_all[, paste0(n_var, "_log2") ] <-
+#     e_log_shift(dat_all[, n_var])
+#
+#   labelled::var_label(dat_all[, paste0(n_var, "_log2") ]) <-
+#     paste("log2", labelled::var_label( dat_all[, n_var] ))
+# }
+
+
+
+# # bind data together
+# dat_all <-
+#   dat_all |>
+#   dplyr::bind_rows(
+#     dat_sweden
+#   ) |>
+#   dplyr::mutate(
+#     dx_current = dx_current |> factor(levels = c("Control", "LA", "AD", "SIVD", "Mixed", "Sweden"))
+#   )
+
+#names(dat_all) |> stringr::str_subset(pattern = "_ALL_") |> stringr::str_subset(pattern = "_label", negate = TRUE)
+#names(dat_all) |> stringr::str_subset(pattern = "fl_") |> stringr::str_subset(pattern = "_label", negate = TRUE)
+
+
+#dat_var_label_matching <-
+#  tibble::tribble(
+#    ~Var                              , ~Type                          , ~Scale
+#  , "fl_csf_glucose"                  , "CSF Other"                    , "log2"
+#  , "fl_csf_total_protein"            , "CSF Other"                    , "log2"
+#  , "fl_csf_rbc"                      , "CSF Other"                    , "log2"
+#  , "fl_csf_tnc"                      , "CSF Other"                    , "log2"
+#  , "fl_csf_igg"                      , "CSF Other"                    , "log2"
+#  , "fl_csf_albumin"                  , "CSF Permeability"             , "log2"
+#  , "fl_csf_igg_synthesis"            , "CSF Other"                    , "log2"
+#  , "fl_igg_index"                    , "CSF Other"                    , "log2"
+#  , "fl_albumin_index"                , "CSF Permeability"             , "log2"
+#  , "fl_oligoclonal_bands"            , "CSF Other"                    , "log2"
+#  , "fl_myelin_basic_protein"         , "CSF Other"                    , "log2"
+#  , "fl_serum_igg"                    , "Plasma Other"                 , "log2"
+#  , "fl_serum_albumin"                , "Plasma Permeability"          , "log2"
+#  , "fl_zym_plasma_mmp_2_72_kda"      , "Plasma MMP"                   , "log2"
+#  , "fl_zym_plasma_mmp_2_62_kda"      , "Plasma MMP"                   , "log2"
+#  , "fl_zym_mmp_2_index"              , "CSF MMP"                      , "log2"
+#  , "fl_zym_plasma_mmp_2_92_kda"      , "Plasma MMP"                   , "log2"
+#  , "fl_zym_plasma_mmp_2_84_kda"      , "Plasma MMP"                   , "log2"
+#  , "fl_msd_plasma_mmp_1"             , "Plasma MMP"                   , "log2"
+#  , "fl_msd_plasma_mmp_2"             , "Plasma MMP"                   , "log2"
+#  , "fl_msd_plasma_mmp_3"             , "Plasma MMP"                   , "log2"
+#  , "fl_msd_plasma_mmp_9"             , "Plasma MMP"                   , "log2"
+#  , "fl_msd_plasma_mmp_10"            , "Plasma MMP"                   , "log2"
+#  , "fl_msd_csf_mmp_1"                , "CSF MMP"                      , "log2"
+#  , "fl_msd_csf_mmp_2"                , "CSF MMP"                      , "log2"
+#  , "fl_msd_csf_mmp_3"                , "CSF MMP"                      , "log2"
+#  , "fl_msd_csf_mmp_9"                , "CSF MMP"                      , "log2"
+#  , "fl_msd_csf_mmp_10"               , "CSF MMP"                      , "log2"
+#  , "fl_msd_mmp_2_index"              , "CSF MMP"                      , "log2"
+#  , "fl_angio_plasma_bfgf"            , "Plasma Angiogenic Factors"    , "log2"
+#  , "fl_angio_plasma_flt_1"           , "Plasma Angiogenic Factors"    , "log2"
+#  , "fl_angio_plasma_tie2"            , "Plasma Angiogenic Factors"    , "log2"
+#  , "fl_angio_plasma_vegf_a"          , "Plasma Angiogenic Factors"    , "log2"
+#  , "fl_angio_plasma_vegf_c"          , "Plasma Angiogenic Factors"    , "log2"
+#  , "fl_angio_plasma_vegf_d"          , "Plasma Angiogenic Factors"    , "log2"
+#  , "fl_angio_csf_bfgf"               , "CSF Angiogenic Factors"       , "log2"
+#  , "fl_angio_csf_flt_1"              , "CSF Angiogenic Factors"       , "log2"
+#  , "fl_angio_csf_tie2"               , "CSF Angiogenic Factors"       , "log2"
+#  , "fl_angio_csf_vegf_a"             , "CSF Angiogenic Factors"       , "log2"
+#  , "fl_angio_csf_vegf_c"             , "CSF Angiogenic Factors"       , "log2"
+#  , "fl_angio_csf_vegf_d"             , "CSF Angiogenic Factors"       , "log2"
+#  , "fl_abeta_38"                     , "CSF AD"                       , "log2"
+#  , "fl_abeta_4240_ratio"             , "CSF AD"                       , ""
+#  , "fl_cyto_csf_ifn_g"               , "CSF Cytokines"                , "log2"
+#  , "fl_cyto_csf_il_10"               , "CSF Cytokines"                , "log2"
+#  , "fl_cyto_csf_il_12p70"            , "CSF Cytokines"                , "log2"
+#  , "fl_cyto_csf_il_13"               , "CSF Cytokines"                , "log2"
+#  , "fl_cyto_csf_il_1b"               , "CSF Cytokines"                , "log2"
+#  , "fl_cyto_csf_il_2"                , "CSF Cytokines"                , "log2"
+#  , "fl_cyto_csf_il_4"                , "CSF Cytokines"                , "log2"
+#  , "fl_cyto_csf_il_6"                , "CSF Cytokines"                , "log2"
+#  , "fl_cyto_csf_il_8"                , "CSF Cytokines"                , "log2"
+#  , "fl_cyto_csf_tnf_a"               , "CSF Cytokines"                , "log2"
+#  , "fl_cyto_plasma_ifn_g"            , "Plasma Cytokines"             , "log2"
+#  , "fl_cyto_plasma_il_10"            , "Plasma Cytokines"             , "log2"
+#  , "fl_cyto_plasma_il_12p70"         , "Plasma Cytokines"             , "log2"
+#  , "fl_cyto_plasma_il_13"            , "Plasma Cytokines"             , "log2"
+#  , "fl_cyto_plasma_il_2"             , "Plasma Cytokines"             , "log2"
+#  , "fl_cyto_plasma_il_4"             , "Plasma Cytokines"             , "log2"
+#  , "fl_cyto_plasma_il_6"             , "Plasma Cytokines"             , "log2"
+#  , "fl_cyto_plasma_il_8"             , "Plasma Cytokines"             , "log2"
+#  , "fl_cyto_plasma_tnf_a"            , "Plasma Cytokines"             , "log2"
+#  , "fl_simoa_csf_il_1b"              , "CSF Cytokines"                , "log2"
+#  , "fl_simoa_edta_plasma_ptau_v2_1"  , "Plasma AD"                    , "log2"
+#  , "fl_simoa_csf_ptau_v2_1"          , "CSF AD"                       , "log2"
+#  , "fl_apoe_ncrad"                   , "CSF Other"                    , "log2"
+#  , "fl_csf__ALL__gfap"               , "CSF Other"                    , "log2"
+#  , "fl_plasma__ALL__gfap"            , "Plasma Other"                 , "log2"
+#  , "fl_csf__ALL__nfl"                , "CSF Other"                    , "log2"
+#  , "fl_plasma__ALL__nfl"             , "Plasma Other"                 , "log2"
+#  , "fl_csf__ALL__ptau"               , "CSF AD"                       , "log2"
+#  , "fl_plasma__ALL__ptau"            , "Plasma AD"                    , "log2"
+#  , "fl_csf__ALL__abeta_40"           , "CSF AD"                       , "log2"
+#  , "fl_plasma__ALL__abeta_40"        , "Plasma AD"                    , "log2"
+#  , "fl_csf__ALL__abeta_42"           , "CSF AD"                       , "log2"
+#  , "fl_plasma__ALL__abeta_42"        , "Plasma AD"                    , "log2"
+#  , "fl_csf__ALL__plgf"               , "CSF Angiogenic Factors"       , "log2"
+#  , "fl_plasma__ALL__plgf"            , "Plasma Angiogenic Factors"    , "log2"
+#  , "fl_plasma__ALL__il_1b"           , "Plasma Cytokines"             , "log2"
+#  , "fl_csf__ALL__mmp_2"              , "CSF MMP"                      , "log2"
+#  , "fl_csf__ALL__mmp_2_index"        , "CSF MMP"                      , "log2"
+#  )
+#
+#dat_var_label_matching |>
+#  dplyr::arrange(Type, Var) |>
+#  print(n=Inf)
+#
+## # separate columns by intended transformation
+## totransform.log2 <-
+##   c(
+##     "fl_albumin_index"
+##   , "mri_dti_freewater_mean"
+##   , "mri_dti_psmd"
+##   , "fl_myelin_basic_protein"
+##   , "fl_igg_index"
+##   , "fl_angio_csf_bfgf"
+##   , "fl_angio_csf_flt_1"
+##   , "fl_angio_csf_plgf"
+##   , "fl_angio_csf_tie2"
+##   , "fl_angio_csf_vegf_a"
+##   , "fl_angio_csf_vegf_c"
+##   , "fl_angio_csf_vegf_d"
+##   , "fl_cyto_csf_il_1b"
+##   , "fl_cyto_csf_il_2"
+##   , "fl_cyto_csf_il_4"
+##   , "fl_cyto_csf_il_6"
+##   , "fl_cyto_csf_il_8"
+##   , "fl_cyto_csf_ifn_g"
+##   , "fl_cyto_csf_tnf_a"
+##   , "fl_msd_csf_mmp_1"
+##   , "fl_msd_csf_mmp_2"
+##   , "fl_msd_csf_mmp_3"
+##   , "fl_msd_csf_mmp_9"
+##   , "fl_msd_csf_mmp_10"
+##   #, "fl_ptau"
+##   , "fl_csf__ALL__gfap"
+##   , "fl_csf__ALL__nfl"
+##   , "fl_csf__ALL__ptau"
+##   , "mri_perm_3t_tot"
+##   #, "percent_wmhv"
+##   )
+#tokeep <-
+#  c(
+#    "ID"
+#  , "ptid"
+#  , "demo_bl_age"
+#  , "demo_sex"
+#  , "demo_yrs_edu"
+#  , "dx_current"
+#  #, "percent_hippo"
+#  , "mri_mean_cort_thick_mm"
+#  , "fl_abeta_4240_ratio"
+#  )
+#
+#dx.tokeep <-
+#  c("LA", "Mixed", "SIVD", "AD")
+#
+## format data
+#dat_all <-
+#  dat_all %>%
+#  dplyr::select(
+#    tidyselect::all_of(tokeep)
+#  , tidyselect::all_of(dat_var_label_matching$Var)
+#  ) %>%
+#  dplyr::filter(
+#    dx_current %in% dx.tokeep
+#  ) %>%
+#  dplyr::mutate(
+#    dx_current    = dx_current
+#  , demo_sex      = ifelse(demo_sex == "", NA, demo_sex) %>% factor()
+#  , dx_current    = dx_current %>% factor()
+#  , ptid          = ptid %>% factor()
+#  )
+#
+#
+#dat_all <-
+#  dat_all |>
+#  dplyr::select(
+#    ID
+#  , ptid
+#  , dx_current
+#  #, prop_complete
+#  , tidyselect::starts_with("I_")
+#  , tidyselect::all_of(dat_all |> names() |> stringr::str_subset(pattern = stringr::fixed("_csf_"   )) |> sort())
+#  , tidyselect::all_of(dat_all |> names() |> stringr::str_subset(pattern = stringr::fixed("_plasma_")) |> sort())
+#  , tidyselect::everything()
+#  )
+
+# Define the baseline visit categories
+baseline_visits <- c(
+  "Baseline (Arm 1: Patients)",
+  "Baseline (Arm 2: Control)",
+  "Baseline (Arm 3: CSF controls)",
+  "Baseline (Arm 4: Diabetes)",
+  "baseline",
+  "Initial Visit (Arm 1: Arm 1)"
+)
+
+dat_sub <- dat_all |>
+  filter(
+    redcap_event_name %in% baseline_visits,
+    dx_current != "Control",
+    dx_current != "Unknown",
+    dx_current != "Repeat pt",
+    !is.na(dx_current)  # optional: removes any NA values too
+  )
+# update log2 variable using different offset from 0
+dat_sub$mri_perm_3t_tot_log2 <- 
+  dat_sub$mri_perm_3t_tot |> 
+  e_log_shift(min_add = 0.1)
+
+
+dat_sub <-
+  dat_sub |>
+  tidyr::separate_wider_delim(
+    cols = ptid
+  , delim = "-"
+  , names = c("ptid_Prefix", "ptid_Number")
+  , cols_remove = FALSE
+  )
+
+# number of patients from each study
+dat_sub$ptid_Prefix |> table()
+
+# Then save it as an RData file
+save(dat_sub, Var,
+     file = "dat_sub_and_Var_for_inflammation_analysis.RData")
+save(dat_sub, Var,
+     file = "dat_sub_Data_inflammation_analysis_paper_06052025.RData")
+## log2 versions
+#for (n_var in dat_var_label_matching |> filter(Scale == "log2") |> pull(Var) ){  #str_subset(names(dat_sub), pattern = "^fl_")) {
+#  ## n_var = (dat_var_label_matching |> filter(Scale == "log2") |> pull(Var))[1]
+#
+#  this_var_label <- labelled::var_label( dat_sub[, n_var] )
+#
+#  dat_sub[, n_var ] <-  # paste0(n_var, "_log2")
+#    e_log_shift(dat_sub[, n_var])
+#
+#  #labelled::var_label(dat_sub[, paste0(n_var, "_log2") ]) <-
+#  labelled::var_label(dat_sub[, n_var ]) <-
+#    paste0(this_var_label, ", log2")
+#}
+
+p <-
+  e_plot_missing(
+    dat_plot       = dat_sub
+  , var_group      = "dx_current"
+  , sw_group_sort  = TRUE
+  , var2_sort      = "fl_albumin_index_log2" # prop_complete
+  )
+p |> print()
+ggsave(
+      paste0("plot_missing", ".png")
+    , plot   = p
+    , width  = 12
+    , height = 10
+    ## png, jpeg
+    , dpi    = 300
+    , bg     = "white"
+    ## pdf
+    #, units  = "in"
+    #, useDingbats = FALSE
+    )
+```
+

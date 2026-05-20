@@ -1,0 +1,4424 @@
+---
+title:        "Univariate Analysis for Inflammation"
+subtitle:     "Based on Hilmer, et al., (2022). *Blood-brain barrier disruption measured by albumin index correlates with inflammatory fluid biomarkers*"
+author:       Azadeh Golduzian
+date:         last-modified # today, now, last-modified
+date-format:  long          # full, long, medium, short, iso,   https://quarto.org/docs/reference/dates.html
+format:
+  html:
+    theme:                  litera
+    highlight-style:        atom-one
+    page-layout:            full      # article, full   # https://quarto.org/docs/output-formats/page-layout.html
+    toc:                    true
+    toc-depth:              4
+    toc-location:           body      # left, body, right
+    number-sections:        true      # true, false
+    number-depth:           3
+    code-fold:              show      # true (initially hidden), false, show (initially shown)
+    code-tools:                       # menu top-right to show/hide all code
+      toggle:               true
+      caption:              "Code"    # none
+      source:               false
+    code-overflow:          scroll    # scroll, wrap
+    code-block-bg:          true
+    code-block-border-left: "#30B0E0"
+    df-print:               paged     # default, kable, tibble, paged   # https://quarto.org/docs/computations/r.html
+fig-width:                  6
+fig-height:                 4
+execute: # https://quarto.org/docs/computations/execution-options.html, https://quarto.org/docs/computations/r.html
+  cache:    false   # false, true
+  eval:     true    # true, false  Evaluate the code chunk (if false, just echos the code into the output).
+  echo:     true    # true, false  Include the source code in output
+---
+
+<!---
+# Erik's compile commands in R:
+  setwd("D:/Dropbox/StatAcumen/consult/Authorship/2014_GaryRosenberg_UNM_NIH_VascularDementia_MRI/2024_ADRC/Analyses/202501_ADRC_Permeability")
+  fn_qmd <- "Erhardt_Rosenberg_ADRC_Fluid_Permeability_Analysis_20250219.qmd"
+  quarto::quarto_render(input = fn_qmd)
+-->
+
+```{r init, echo=FALSE}
+#options(width = 80)
+#options(warn  = -1)
+options(str   = strOptions(list.len = 1e3))
+options(knitr.kable.NA = '') # Display NAs as blanks
+my_seed <- 34567
+set.seed(my_seed)
+```
+
+--------------------------------------------------------------------------------
+
+# Next actions
+
+2/19/2025 Comparison presentation:
+
+<https://docs.google.com/presentation/d/10neeggTjkKFs3SFFL9hJXMTKkTZ0W43RY4E2Myppx1o/edit#slide=id.g33159024d0d_0_357>
+
+
+
+--------------------------------------------------------------------------------
+
+# Data preliminaries
+
+```{r chunk-003}
+library(erikmisc)
+library(tidyverse)
+library(labelled)
+library(corrplot)
+library(broom)
+# install.packages("dunn.test")
+library(dunn.test)
+library(ggpubr)
+# devtools::install_github("vincentarelbundock/modelsummary")
+# install.packages("modelsummary")
+library(modelsummary)
+
+dir.create("All_figures_for_paper", showWarnings = FALSE)
+```
+
+
+```{r}
+load ("/Users/azadehgolduzian/Dropbox/2024_ADRC/Data/Data_out/current/ADRC4_ADRC3_MarkVCID2_VCI_ALL.RData")
+
+load("dat_sub_Data_inflammation_analysis_paper_06052025.RData"
+     )
+load("dat_sub_and_Var_for_inflammation_analysis.RData")
+
+```
+
+
+# ╔══════════════════════════════════════════════════════════════════════════════╗
+# ║           UNIVARIATE HEATMAP: AIC-SELECTED REGRESSION MODELS               ║
+# ╚══════════════════════════════════════════════════════════════════════════════╝
+#
+# PURPOSE:
+#   For each combination of (response variable × biomarker covariate), fit a
+#   linear regression model and display the retained coefficients as a color-
+#   coded heatmap. This is the primary screening tool for identifying which
+#   inflammatory biomarkers associate with BBB permeability measures.
+#
+# RESPONSE VARIABLES (columns in the heatmap):
+#   1. Albumin Index (log2)          — CSF measure of BBB permeability
+#   2. 3T MRI Permeability (log2)    — Ktrans, imaging measure of BBB permeability
+#   3. CSF GFAP (log2)               — Astrocyte activation marker (CSF)
+#   4. Plasma GFAP (log2)            — Astrocyte activation marker (plasma)
+#   [5. PC1 Composite Score]         — Optional, only if PC1 block was run above
+#
+# COVARIATES (rows in the heatmap):
+#   All CSF, plasma, and MRI biomarkers in Var$csf, Var$plasma, Var$mri
+#   EXCEPT the response variables themselves (excluded to prevent self-regression)
+#
+# MODEL STRUCTURE (for each response × covariate pair):
+#   Full model:    Y ~ age + sex + X + age:X + sex:X
+#   Selection:     AIC-based bidirectional stepwise (f_model_sel function)
+#   The selected model keeps only the terms that improve AIC
+#
+# WHAT EACH HEATMAP COLUMN MEANS:
+#   n          — sample size for that response × covariate pair
+#   Age        — coefficient for age main effect
+#   Gender     — coefficient for sex main effect
+#   X          — coefficient for the biomarker (main association of interest)
+#   Age:X      — age × biomarker interaction (association changes with age)
+#   Gender:X   — sex × biomarker interaction (association differs by sex)
+#
+# HOW TO READ THE HEATMAP:
+#   Color      — direction and magnitude of the coefficient
+#                Red = positive association, Blue = negative association
+#                White/gray = term not retained by AIC (coefficient = 0 or NA)
+#   Stars      — p-value significance: * p<0.05, ** p<0.01, *** p<0.001
+#   Colored but no star = AIC retained the term but p >= 0.05
+#                        (important! colored = scientifically relevant,
+#                         not just p-value driven)
+#
+# OUTPUT:
+#   dat_plot          — long-format tibble with all coefficients and p-values
+#   dat_plot_modified — dat_plot with cleaned labels for plotting
+#   p_combined_AIC    — the final combined heatmap figure (CSF+MRI | Plasma)
+#   Saved to: All_figures_for_paper/p_combined_AIC.png
+#
+# NOTE ON MULTIPLE COMPARISONS:
+#   This is an exploratory analysis. AIC is the primary selection criterion,
+#   not p-value thresholds. Colored tiles without stars directly address
+#   concerns about p-value fishing — the model retained these terms on
+#   information-theoretic grounds regardless of significance.
+#   FDR correction code is available but commented out below.
+# ─────────────────────────────────────────────────────────────────────────────
+```{r}
+
+dat_var_label_matching <-
+  tibble::tribble(
+    ~Var                                    , ~Group  , ~Type                          , ~Scale
+  #, "ptid"                                 ,         ,                                ,
+  #, "dx_current"                           ,         ,                                ,
+  #, "sex"                                  ,         ,                                ,
+  #, "demo_edu_yrs"                         ,         ,                                ,
+  #, "age"                                  ,         ,                                ,
+  ##### CSF                                 ,         ,                                ,
+  , "fl_albumin_index_log2"                 , "CSF"   , "CSF Permeability"             , "log2"
+  , "fl_igg_index_log2"                     , "CSF"   , "CSF Other"                    , "log2"
+  , "fl_csf_igg_log2"                       , "CSF"   , "CSF Other"                    , "log2"
+  , "fl_msd_csf_mmp_1_log2"                 , "CSF"   , "CSF MMP"                      , "log2"
+  , "fl_msd_csf_mmp_2_log2"                 , "CSF"   , "CSF MMP"                      , "log2"
+  , "fl_msd_csf_mmp_3_log2"                 , "CSF"   , "CSF MMP"                      , "log2"
+  , "fl_msd_csf_mmp_9_log2"                 , "CSF"   , "CSF MMP"                      , "log2"
+  , "fl_csf__ALL__mmp_10_log2"              , "CSF"   , "CSF MMP"                      , "log2"
+  , "fl_angio_csf_bfgf_log2"                , "CSF"   , "CSF Angio"       , "log2"
+  , "fl_angio_csf_flt_1_log2"               , "CSF"   , "CSF Angio"       , "log2"
+  , "fl_angio_csf_tie2_log2"                , "CSF"   , "CSF Angio"       , "log2"
+  , "fl_angio_csf_vegf_a_log2"              , "CSF"   , "CSF Angio"       , "log2"
+  , "fl_angio_csf_vegf_c_log2"              , "CSF"   , "CSF Angio"       , "log2"
+  , "fl_angio_csf_vegf_d_log2"              , "CSF"   , "CSF Angio"       , "log2"
+  , "fl_cyto_csf_ifn_g_log2"                , "CSF"   , "CSF Cytokines"                , "log2"
+  , "fl_csf__ALL__il_1b_log2"               , "CSF"   , "CSF Cytokines"                , "log2"
+  , "fl_cyto_csf_il_2_log2"                 , "CSF"   , "CSF Cytokines"                , "log2"
+  , "fl_cyto_csf_il_4_log2"                 , "CSF"   , "CSF Cytokines"                , "log2"
+  , "fl_cyto_csf_il_6_log2"                 , "CSF"   , "CSF Cytokines"                , "log2"
+  , "fl_cyto_csf_il_8_log2"                 , "CSF"   , "CSF Cytokines"                , "log2"
+  , "fl_cyto_csf_il_10_log2"                , "CSF"   , "CSF Cytokines"                , "log2"
+  , "fl_cyto_csf_il_12p70_log2"             , "CSF"   , "CSF Cytokines"                , "log2"
+  , "fl_cyto_csf_il_13_log2"                , "CSF"   , "CSF Cytokines"                , "log2"
+  , "fl_cyto_csf_tnf_a_log2"                , "CSF"   , "CSF Cytokines"                , "log2"
+  , "fl_csf__ALL__nfl_log2"                 , "CSF"   , "CSF Other"                    , "log2"
+  , "fl_csf__ALL__plgf_log2"                , "CSF"   , "CSF Other"                    , "log2"
+  , "fl_csf__ALL__gfap_log2"                , "CSF"   , "CSF Other"                    , "log2"
+  , "fl_abeta_4240_ratio_log2"              , "CSF"   , "CSF AD"                       , "log2"
+  , "fl_csf__ALL__ptau_log2"                , "CSF"   , "CSF AD"                       , "log2"
+  , "fl_myelin_basic_protein_log2"          , "CSF"   , "CSF Other"                    , "log2"
+  ##### Plasma                              ,         ,                                ,
+  , "fl_serum_igg_log2"                     , "Plasma", "Plasma Other"                 , "log2"
+  , "fl_plasma__ALL__mmp_1_log2"            , "Plasma", "Plasma MMP"                   , "log2"
+  , "fl_plasma__ALL__mmp_2_log2"            , "Plasma", "Plasma MMP"                   , "log2"
+  , "fl_plasma__ALL__mmp_3_log2"            , "Plasma", "Plasma MMP"                   , "log2"
+  , "fl_plasma__ALL__mmp_9_log2"            , "Plasma", "Plasma MMP"                   , "log2"
+  , "fl_plasma__ALL__mmp_10_log2"           , "Plasma", "Plasma MMP"                   , "log2"
+  , "fl_plasma__ALL__bfgf_log2"             , "Plasma", "Plasma Angio"    , "log2"
+  , "fl_plasma__ALL__flt_1_log2"            , "Plasma", "Plasma Angio"    , "log2"
+  , "fl_plasma__ALL__tie2_log2"             , "Plasma", "Plasma Angio"    , "log2"
+  , "fl_plasma__ALL__vegf_a_log2"           , "Plasma", "Plasma Angio"    , "log2"
+  , "fl_plasma__ALL__vegf_c_log2"           , "Plasma", "Plasma Angio"    , "log2"
+  , "fl_plasma__ALL__vegf_d_log2"           , "Plasma", "Plasma Angio"    , "log2"
+  , "fl_cyto_heparin_plasma_ifn_g_log2"     , "Plasma", "Plasma Cytokines"             , "log2"
+  , "fl_plasma__ALL__il_1b_log2"            , "Plasma", "Plasma Cytokines"             , "log2"
+  , "fl_cyto_heparin_plasma_il_2_log2"      , "Plasma", "Plasma Cytokines"             , "log2"
+  , "fl_cyto_heparin_plasma_il_4_log2"      , "Plasma", "Plasma Cytokines"             , "log2"
+  , "fl_cyto_heparin_plasma_il_6_log2"      , "Plasma", "Plasma Cytokines"             , "log2"
+  , "fl_cyto_heparin_plasma_il_8_log2"      , "Plasma", "Plasma Cytokines"             , "log2"
+  , "fl_cyto_heparin_plasma_il_10_log2"     , "Plasma", "Plasma Cytokines"             , "log2"
+  , "fl_cyto_heparin_plasma_il_12p70_log2"  , "Plasma", "Plasma Cytokines"             , "log2"
+  , "fl_cyto_heparin_plasma_il_13_log2"     , "Plasma", "Plasma Cytokines"             , "log2"
+  , "fl_cyto_heparin_plasma_tnf_a_log2"     , "Plasma", "Plasma Cytokines"             , "log2"
+  , "fl_plasma__ALL__nfl_log2"              , "Plasma", "Plasma Other"                 , "log2"
+  , "fl_plasma__ALL__plgf_log2"             , "Plasma", "Plasma Other"                 , "log2"
+  , "fl_plasma__ALL__gfap_log2"             , "Plasma", "Plasma Other"                 , "log2"
+  , "fl_plasma__ALL__abeta_40_log2"         , "Plasma", "Plasma AD"                    , "log2"
+  , "fl_plasma__ALL__abeta_42_log2"         , "Plasma", "Plasma AD"                    , "log2"
+  , "fl_plasma__ALL__ptau_181_log2"         , "Plasma", "Plasma AD"                    , "log2"
+  , "fl_plasma__ALL__ptau_217_log2"         , "Plasma", "Plasma AD"                    , "log2"
+  ##### MRI                                 ,         ,                                ,
+  , "mri_percent_vol_hippo"                 , "MRI"   , "MRI"                          , "org"
+  # , "mri_ucd_wmhv_percent"                  , "MRI"   , "MRI Other"                    , "org"  # 2/19/2025 too few observations
+  , "mri_mean_cort_thick_mm"                , "MRI"   , "MRI"                          , "org"
+  , "mri_perm_3t_tot"                       , "MRI"   , "MRI"                          , "org"
+  , "mri_perm_3t_tot_log2"                  , "MRI"   , "MRI"                          , "log2"
+  , "mri_dti_psmd"                          , "MRI"   , "MRI"                          , "org"
+  , "mri_dti_freewater_mean"                , "MRI"   , "MRI"                          , "org"
+  )
+
+dat_var_label_matching <- dat_var_label_matching |> 
+  mutate(Type_short = Type |> str_replace(pattern = "^CSF |^Plasma ", replacement = ""))
+
+# Add this RIGHT AFTER dat_var_label_matching is defined
+dat_var_label_matching <- dat_var_label_matching %>%
+  dplyr::bind_rows(
+    tibble::tibble(
+      Var        = "PC1",
+      Group      = "CSF",          # treat as CSF so it appears in panel A
+      Type       = "CSF Other",
+      Scale      = "pc1",
+      Type_short = "Other"
+    )
+  )
+
+print(dat_var_label_matching, n=Inf)
+
+var_list_plot<-
+  c(
+    Var$csf
+  , Var$plasma
+  , Var$mri
+  )
+
+#normalize so color scale is meaningful
+
+# data for demographics, before z-score scaling
+dat_sheet_demo <-
+  #dat_sheet
+  dat_sub
+
+dat_sheet <-
+  #dat_sheet %>%
+  dat_sub %>%
+  dplyr::mutate(
+    # to allow log transformation when wmhv==0
+  #  percent_wmhv  = percent_wmhv + 0.00001
+  #  fl_cyto_csf_il_4 = ifelse(fl_cyto_csf_il_4 == 0.001, NA, fl_cyto_csf_il_4)
+  #  across(tidyselect::all_of(c(Var$csf, Var$plasma, Var$mri)), e_log_shift, min_add = 1, base_log = 2)
+    across(tidyselect::all_of(c(Var$csf, Var$plasma, Var$mri)), scale)
+  , across(tidyselect::all_of(c(Var$csf, Var$plasma, Var$mri)), as.numeric)
+  )
+
+# ╔══════════════════════════════════════════════════════════════════════════════╗
+# ║           OPTIONAL: ADD PC1 AS A 5TH RESPONSE VARIABLE                     ║
+# ║                                                                              ║
+# ║  This block creates a composite inflammatory score (PC1) from 5 CSF         ║
+# ║  biomarkers and adds it to dat_sheet so it can be used as a response        ║
+# ║  variable in the univariate heatmap alongside Albumin, Ktrans, CSF GFAP,   ║
+# ║  and Plasma GFAP.                                                            ║
+# ║                                                                              ║
+# ║  IF YOU DO NOT WANT PC1 IN THE HEATMAP:                                     ║
+# ║    1. Comment out this entire block (from ╔ to ╚)                           ║
+# ║    2. Keep list_var_resp WITHOUT "PC1" (see below)                          ║
+# ║    3. Keep ind_var_covar WITHOUT "PC1"                                      ║
+# ║    4. Keep ind_row WITHOUT "PC1"                                            ║
+# ║    5. Keep l_var_resp WITHOUT "PC1"                                         ║
+# ║    6. Keep Label_resp levels WITHOUT "PC1 Composite Inflammatory Score"     ║
+# ╚══════════════════════════════════════════════════════════════════════════════╝
+# 
+# vars_pca <- c(
+#   "fl_albumin_index_log2",
+#   "fl_csf__ALL__gfap_log2",
+#   "fl_igg_index_log2",
+#   "fl_cyto_csf_il_8_log2",
+#   "fl_cyto_csf_il_6_log2"
+# )
+# 
+# dat_pca <- dat_sub %>%
+#   dplyr::select(ptid, all_of(vars_pca)) %>%
+#   tidyr::drop_na()
+# 
+# cat("N for PCA:", nrow(dat_pca), "\n")
+# 
+# pca_fit <- prcomp(
+#   dat_pca %>% dplyr::select(all_of(vars_pca)),
+#   center = TRUE,
+#   scale. = TRUE
+# )
+# 
+# dat_pca$PC1_raw <- pca_fit$x[, 1]
+# 
+# cor_pc1_albumin <- cor(
+#   dat_pca$PC1_raw,
+#   dat_pca$fl_albumin_index_log2,
+#   method = "spearman",
+#   use    = "complete.obs"
+# )
+# cat("Spearman cor(PC1, Albumin):", round(cor_pc1_albumin, 3), "\n")
+# 
+# dat_pca$PC1 <- dat_pca$PC1_raw * ifelse(cor_pc1_albumin < 0, -1, 1)
+# 
+# # Merge PC1 into dat_sheet
+# dat_sheet <- dat_sheet %>%
+#   dplyr::left_join(
+#     dat_pca %>% dplyr::select(ptid, PC1),
+#     by = "ptid"
+#   )
+# 
+# labelled::var_label(dat_sheet[["PC1"]]) <- "PC1 Composite Inflammatory Score"
+# cat("PC1 added for", sum(!is.na(dat_sheet$PC1)), "participants\n")
+
+# ── END OF OPTIONAL PC1 BLOCK ─────────────────────────────────────────────────
+
+
+
+
+
+  # %>%
+  #dplyr::mutate_if(is.numeric, scale) %>%
+
+# label dataset
+for (n_label in as.character(unlist(Var))) {
+  ## i_label = 1
+  labelled::var_label(dat_sheet     [[ n_label ]]) <- labelled::var_label(dat_sheet_demo[[ n_label ]])
+  #labelled::var_label(dat_sheet_demo[[ dat_var_label_matching$Var[i_label] ]]) <- dat_var_label_matching$Label[i_label]
+}
+
+#get regression coefficients for reduced model
+
+source("./model_sel_new.R")
+
+lm_criterion <- c("AIC", "BIC")[1]
+
+## model selection
+f_model_sel <-
+  function(
+    dat_this      = dat_lm
+  , lm_criterion  = c("AIC", "BIC")[1]
+  ) {
+
+  if (lm_criterion == "AIC") { AIC_k = 2                     }
+  if (lm_criterion == "BIC") { AIC_k = log(nrow( dat_this )) }
+
+  results_list     <- list()
+  results_list$mod <- f_formula_init()
+  results_list$fit <- list()
+  results_list$AIC <- list()
+
+  for (i_mod in seq_len(length(results_list$mod))) {
+    ## i_mod = 1
+
+    results_list$fit[[i_mod]] <-
+      lm(
+        formula = results_list$mod[[i_mod]]
+      , data    = dat_this
+      )
+
+    results_list$AIC[[i_mod]] <-
+      results_list$fit[[i_mod]] %>%
+      AIC(k = AIC_k)
+  }
+
+  ## some models have a term with 0 df, skip this model
+  # first remove models with no error estimate
+  results_list$AIC[ results_list$AIC == -Inf ] <- Inf
+  # then remove models with 0 df
+  sw_df_zero <- TRUE
+  while(sw_df_zero) {
+    # select lowest AIC, index
+    ind_min_AIC <-
+      results_list$AIC %>%
+      unlist() %>%
+      which.min()
+
+    sw_df_zero <-
+      any(
+        results_list$fit[[ind_min_AIC]] %>%
+        car::Anova(type = 3, singular.ok = TRUE) %>%
+        pull(Df)
+          ==
+        0
+      )
+
+    if (sw_df_zero) {
+      print("Skipping 0-df model")
+      #results_list$mod[[ind_min_AIC]] <- NULL
+      #results_list$fit[[ind_min_AIC]] <- NULL
+      #results_list$AIC[[ind_min_AIC]] <- NULL
+      results_list$AIC[[ind_min_AIC]] <- Inf
+    } # if
+  } # while
+
+  # selected model
+  results <-
+    results_list$fit[[ind_min_AIC]]
+
+  return(results)
+} # f_model_sel
+
+
+list_var_resp <-
+  c("fl_albumin_index_log2", 
+    "mri_perm_3t_tot_log2",
+    "fl_csf__ALL__gfap_log2",
+    "fl_plasma__ALL__gfap_log2"
+     # "PC1"  
+    )
+ind_var_covar <-
+  #c(totransform.log2, tokeep) %notin%
+  var_list_plot %notin%
+    c("ptid","age","sex","demo_edu_yrs","dx_current","fl_albumin_index_log2",
+      "mri_perm_3t_tot_log2",
+      "mri_perm_3t_tot",
+      "fl_csf__ALL__gfap_log2",
+      "fl_plasma__ALL__gfap_log2"
+      # "PC1"  
+
+    )
+list_var_covar <-
+  var_list_plot[ind_var_covar]
+
+results <- list()
+
+for (i_resp in seq_along(list_var_resp)) {
+  for (i_covar in seq_along(list_var_covar)) {
+    ## i_resp = 2
+    ## i_covar = 6
+    ## i_resp = 1
+    ## i_covar = 1
+    ## i_resp = 1
+    ## i_covar = 23
+
+    var_resp  <- list_var_resp[i_resp]
+    var_covar <- list_var_covar[i_covar]
+
+    print(paste0("BEGIN  Resp: ", i_resp, " ", var_resp, ",  Covar: ", i_covar, " ", var_covar, "  ===================================================="))
+
+    if (i_covar == 1) {
+      results[[var_resp]] <- list()
+    }
+    results[[var_resp]][[var_covar]] <- list()
+
+    # subset of data for linear model
+    dat_lm <-
+      dat_sheet %>%
+      dplyr::select(
+        all_of(var_resp)
+      , all_of(var_covar)
+      , age
+      , sex
+      #, demo_edu_yrs  # 3/9/2022 Educ added
+      ) %>%
+      dplyr::mutate(
+        Y = !!sym(var_resp)
+      , X = !!sym(var_covar)
+      ) %>%
+      tidyr::drop_na() %>%
+      tidyr::as_tibble()
+    n_sample <- nrow(dat_lm)
+
+    if (n_sample == 0) {
+      next
+    }
+
+
+    form_lm <-
+      as.formula(
+        paste0(
+        #  var_resp
+          "Y"
+        , " ~ "
+        , "age"
+        , " + "
+        , "sex"
+        #, " + "
+        #, "demo_edu_yrs"    # 3/9/2022 Educ added
+        , " + "
+        #, var_covar
+        , "X"
+        , " + "
+        #, paste0("age", ":", var_covar)
+        , paste0("age", ":", "X")
+        , " + "
+        #, paste0("sex", ":", var_covar)
+        , paste0("sex", ":", "X")
+        #, " + "
+        #, paste0("demo_edu_yrs", ":", "X")    # 3/9/2022 Educ added
+        )
+      )
+
+    results[[var_resp]][[var_covar]][["form_lm"]] <- form_lm
+    results[[var_resp]][[var_covar]][["dat_lm" ]] <- dat_lm
+
+    results[[var_resp]][[var_covar]][["lm_fit_full"]] <-
+      lm(
+        formula = form_lm
+      , data    = dat_lm
+      )
+
+    ## results[[var_resp]][[var_covar]][["lm_fit_red_BIC"]] <-
+    ##   stats::step(
+    ##     object = results[[var_resp]][[var_covar]][["lm_fit_full"]]
+    ##   , direction = "both"
+    ##   , test = "F"
+    ##   , trace = 0
+    ##   , k = log(nrow(dat_lm))
+    ##   )
+
+    results[[var_resp]][[var_covar]][["lm_fit_red_BIC"]] <-
+      f_model_sel(
+        dat_this      = dat_lm
+      , lm_criterion  = lm_criterion
+      )
+
+
+    results[[var_resp]][[var_covar]][["lm_fit_full"]]$df.residual
+
+    ### 7/8/2022 report all results
+    ## skip if model selection removed our x variable
+    if (!("X" %in% names(coef(results[[var_resp]][[var_covar]][["lm_fit_red_BIC"]])))) {
+      print("Model selection removed X variable")
+      results[[var_resp]][[var_covar]]$sw_sig_X <- FALSE
+      #next
+    } else {
+      results[[var_resp]][[var_covar]]$sw_sig_X <- TRUE
+    }
+
+    print(summary(results[[var_resp]][[var_covar]][["lm_fit_red_BIC"]]))
+
+    # plot residuals
+tryCatch(
+  plot(results[[var_resp]][[var_covar]][["lm_fit_red_BIC"]], which = c(1)),
+  error = function(e) message("Skipping residual plot (n too small): ", e$message)
+)
+    # Scatterplot for fitted reduced model
+
+    covar_names_red <- names(coef(results[[var_resp]][[var_covar]][["lm_fit_red_BIC"]]))
+
+    dat_pred <-
+      tidyr::expand_grid(
+        X = dat_lm[["X"]] %>% range()
+      , age  = c(0, dat_lm[["age"]] %>% quantile(probs = c(0.10, 0.90))) %>% as.numeric()
+      , sex     = dat_lm[["sex"]] %>% unique()
+      #, demo_edu_yrs = c(0, dat_lm[["demo_edu_yrs"]] %>% quantile(probs = c(0.10, 0.90))) %>% as.numeric()
+      )
+
+    ## if (
+    ##   ("age"  %in% covar_names_red) &
+    ##   ("sexMale" %in% covar_names_red) #&
+    ##   #("demo_edu_yrs" %in% covar_names_red)
+    ## ) {
+    ##   dat_pred <-
+    ##     tidyr::expand_grid(
+    ##       X = dat_lm[["X"]] %>% range()
+    ##     , age  = c(0, dat_lm[["age"]] %>% quantile(probs = c(0.10, 0.90))) %>% as.numeric()
+    ##     , sex     = dat_lm[["sex"]] %>% unique()
+    ##     , demo_edu_yrs = c(0, dat_lm[["demo_edu_yrs"]] %>% quantile(probs = c(0.10, 0.90))) %>% as.numeric()
+    ##     )
+    ## } else if (
+    ##   ("age" %in% covar_names_red)
+    ## ) {
+    ##   dat_pred <-
+    ##     tidyr::expand_grid(
+    ##       X = dat_lm[["X"]] %>% range()
+    ##     , age = c(0, dat_lm[["age"]] %>% quantile(probs = c(0.10, 0.90))) %>% as.numeric()
+    ##     #, sex = dat_lm[["sex"]] %>% unique()
+    ##     )
+    ## } else if (
+    ##   ("sexMale" %in% covar_names_red)
+    ## ) {
+    ##   dat_pred <-
+    ##     tidyr::expand_grid(
+    ##       X = dat_lm[["X"]] %>% range()
+    ##     #, age = c(0, dat_lm[["age"]] %>% quantile(probs = c(0.10, 0.90))) %>% as.numeric()
+    ##     , sex = dat_lm[["sex"]] %>% unique()
+    ##     )
+    ## } else {
+    ##   # only X is significant
+    ##   dat_pred <-
+    ##     tidyr::expand_grid(
+    ##       X = dat_lm[["X"]] %>% range()
+    ##     #, age = c(0, dat_lm[["age"]] %>% quantile(probs = c(0.10, 0.90))) %>% as.numeric()
+    ##     #, sex = dat_lm[["sex"]] %>% unique()
+    ##     )
+    ## }
+
+    dat_pred$Y <-
+      predict(
+        results[[var_resp]][[var_covar]][["lm_fit_red_BIC"]]
+      , newdata = dat_pred
+      )
+
+    dat_pred <-
+      dat_pred %>%
+      dplyr::mutate(
+        age  = age  %>% factor(labels = c("10%", "Mean", "90%"))
+      #, demo_edu_yrs = demo_edu_yrs %>% factor(labels = c("10%", "Mean", "90%"))
+      )
+
+    ## if ("age" %in% covar_names_red) {
+    ##   dat_pred <-
+    ##     dat_pred %>%
+    ##     dplyr::mutate(
+    ##       age = age %>% factor(labels = c("10%", "Mean", "90%"))
+    ##     )
+    ## }
+    ## if ("demo_edu_yrs" %in% covar_names_red) {
+    ##   dat_pred <-
+    ##     dat_pred %>%
+    ##     dplyr::mutate(
+    ##       demo_edu_yrs = demo_edu_yrs %>% factor(labels = c("10%", "Mean", "90%"))
+    ##     )
+    ## }
+
+    library(ggplot2)
+    if ("sexFemale" %in% covar_names_red) {
+      p <- ggplot(dat_lm, aes(x = X, y = Y, shape = sex, colour = sex))
+    } else {
+      p <- ggplot(dat_lm, aes(x = X, y = Y))
+    }
+    p <- p + theme_bw()
+    p <- p + geom_point(size = 2, alpha = 1/2)
+    if ("age" %in% covar_names_red) {
+      p <- p + geom_line(data = dat_pred, aes(linetype = age), size = 0.75)
+    } else {
+      p <- p + geom_line(data = dat_pred, size = 0.75)
+    }
+    # 3/9/2022 Educ added  XXX
+
+    p <- p + scale_linetype_manual(values = c(2, 1, 3))
+    p <- p + labs(  title = NULL
+                  #, subtitle = "Progress and Starting Current"
+                  , x = labelled::var_label(dat_sheet[[var_covar]])
+                  , y = labelled::var_label(dat_sheet[[var_resp ]])
+                  #, caption = paste0(  "Model fit averages the numeric variables of Age, A1c, and PAM-10\n"
+                  #                   , "  over Program, Diagnosis, Gender, and General health.\n"
+                  #                   , "Dotted vertical lines indicate cutoffs between depression categories:\n"
+                  #                   , "  None-minimal, Mild, Moderate, Moderately Severe, and Severe."
+                  #                   )
+                  , colour    = "Gender"
+                  , shape     = "Gender"  # "Imputed"
+                  , linetype  = "Age"  #"Diagnosis"
+                  #, fill      = "Diagnosis"
+                  )
+    #p <- p + theme(plot.caption = element_text(hjust = 0))
+    #p <- p + theme(legend.position = "bottom")
+    #p <- p + guides(colour = guide_legend(nrow = 2), shape = guide_legend(nrow = 2))
+    n_sample_annotate <- paste0("N=",n_sample)
+    #p <- p + annotate("text", -Inf, -Inf, label=n_sample_annotate, hjust=-0.3, vjust=-1, colour = "gray25")
+    p <- p + annotate("text", x=-Inf, y= Inf, label=n_sample_annotate, hjust=-0.3, vjust=2, colour = "gray25")
+    print(p)
+
+    results[[var_resp]][[var_covar]][["plot_lm_fit_red_BIC"]] <-
+      p
+
+    print(paste0("END    Resp: ", i_resp, " ", var_resp, ",  Covar: ", i_covar, " ", var_covar, "  ===================================================="))
+    print("")
+    print("")
+    print("")
+    print("")
+    print("")
+    print("")
+    print("")
+    print("")
+
+
+  } # i_covar
+} # i_resp
+
+dat_lm
+#create matrices
+ind_row <-
+  #c(totransform.log2, tokeep) %notin%
+  #  c("ptid","age","sex","demo_edu_yrs","dx_current","fl_albumin_index_log2","mri_perm_3t_tot")
+  as.character(unlist(Var)) %notin%
+    c("ptid","age","sex"
+      ,"demo_edu_yrs",
+      "dx_current",
+      "fl_albumin_index_log2"
+      ,"mri_perm_3t_tot_log2",
+      "fl_plasma__ALL__gfap_log2",
+      "fl_csf__ALL__gfap_log2"
+       # "PC1"  
+      )
+
+n_row <-
+  #c(totransform.log2, tokeep)[ind_row]
+  as.character(unlist(Var))[ind_row]
+
+l_row <-
+  length(n_row)
+
+n_col <-
+  #c("Age", "Gender", "Education", "X", "Age:X", "Gender:X", "Education:X")
+  c("Age", "Gender",              "X", "Age:X", "Gender:X"               )
+l_col <-
+  length(n_col)
+
+# fill matrices with the signficant estimates, leave other cells blank
+
+l_var_resp<-
+  c("fl_albumin_index_log2",
+    "mri_perm_3t_tot_log2",
+    "fl_csf__ALL__gfap_log2",
+    "fl_plasma__ALL__gfap_log2"
+    # "PC1"  
+
+    )
+
+results_fit <- list()
+i_results <- 0
+
+for (i_resp in seq_along(l_var_resp)) {
+  # i_resp = 1
+  for (i_covar in seq_along(n_row)) {
+    ## i_covar = 1
+
+    var_row <- n_row[i_covar]
+    var_col <- l_var_resp[i_resp]
+
+    exists <- results[[var_col]][[var_row]]
+
+    if(length(results[[var_col]][[var_row]]) == 0) {
+      next
+    }
+
+    i_results <- i_results + 1
+
+    results_fit[[ i_results ]] <-
+      results[[var_col]][[var_row]][["lm_fit_red_BIC"]] |>
+      summary() |>
+      broom::tidy() |>
+      dplyr::mutate(
+        term  =
+          term |>
+          stringr::str_replace_all(
+            pattern     = stringr::fixed("sexFemale")
+          , replacement = "Gender"
+          ) |>
+          stringr::str_replace_all(
+            pattern     = stringr::fixed("age")
+          , replacement = "Age"
+          )
+      , Covar =
+          term |>
+          stringr::str_replace_all(
+            pattern     = stringr::fixed("X")
+          , replacement = var_row
+          )
+      , resp  = var_col
+      , covar = var_row
+      , n     = results[[var_col]][[var_row]][[ "dat_lm" ]] |> nrow()
+      ) |>
+      dplyr::relocate(
+        resp
+      , covar
+      )
+
+  } # i_covar
+} # i_resp
+
+dat_plot <-
+  results_fit |>
+  dplyr::bind_rows() |>
+  dplyr::rename(
+  #  Var   = covar
+    Coef  = estimate
+  , pvals = p.value
+  ) %>%
+  dplyr::mutate(
+    pvals_stars =
+      pvals %>%
+      e_pval_stars(
+        cutpoints = c(0, 0.001, 0.01, 0.05, 1)
+      , symbols = c("***", "**", "*", " ")
+      )
+  ) %>%
+  left_join(
+    dat_var_label_matching
+  , by = dplyr::join_by(covar == Var)
+  ) %>%
+  left_join(
+    e_data_var_labels_table_from_data(dat_sheet)
+  , by = dplyr::join_by(covar == Var)
+  ) %>%
+  dplyr::rename(
+    Label_covar = Label
+  ) %>%
+  left_join(
+    e_data_var_labels_table_from_data(dat_sheet)
+  , by = dplyr::join_by(resp == Var)
+  ) %>%
+  dplyr::rename(
+    Label_resp = Label
+  ) %>%
+  dplyr::mutate(
+    Label_covar = Label_covar |> factor()
+  , Label_resp  = Label_resp  |> factor()
+  # , term        = term        |> factor(levels = c("(Intercept)", n_col))
+  , Type_short  = Type_short  |> factor(levels = c("AD", "Angio", "Cytokines", "MMP", "Other", "MRI"))
+  )
+# dat_plot <- dat_plot %>%
+#   dplyr::mutate(
+#     Label_resp = dplyr::if_else(
+#       resp == "PC1" & is.na(as.character(Label_resp)),
+#       "PC1 Composite Inflammatory Score",
+#       as.character(Label_resp)
+#     ),
+#     Label_resp = factor(Label_resp)
+#   )
+# 
+# # Verify PC1 rows exist with correct label
+# dat_plot %>%
+#   dplyr::filter(resp == "PC1") %>%
+#   dplyr::distinct(resp, Label_resp) %>%
+#   print()
+
+# ── CORRECTED FDR block ──────────────────────────────────────────────────────
+
+# Adjust ALL biomarker-related terms (X, Age:X, Gender:X)
+# Done SEPARATELY per response variable (they are independent families)
+
+dat_plot <- dat_plot %>%
+  dplyr::group_by(resp) %>%                          # separate correction per outcome
+  dplyr::mutate(
+    pvals_adj = dplyr::case_when(
+      term %in% c("X", "Age:X", "Gender:X") ~ p.adjust(pvals, method = "fdr"),
+      TRUE ~ pvals                                   # Age, Gender, Intercept: unadjusted
+    ),
+    pvals_stars = pvals_adj %>%
+      e_pval_stars(
+        cutpoints = c(0, 0.001, 0.01, 0.05, 1),
+        symbols   = c("***", "**", "*", " ")
+      )
+  ) %>%
+  dplyr::ungroup()
+
+# ────────────────────────────────────────────────────────────────────────────
+
+# ────────────────────────────────────────────────────────────────────────────
+
+
+
+# ────────────────────────────────────────────────────────────────────────────
+
+#dat_plot <-
+#  dplyr::full_join(
+#    dplyr::bind_rows(
+#      #coef_mat %>%
+#      results_fit %>%
+#      as_tibble(rownames = "Var") %>%
+#      dplyr::mutate(
+#        RespVar = "Albumin Index"
+#      )
+#    , coef_mat_mri %>%
+#      as_tibble(rownames = "Var") %>%
+#      dplyr::mutate(
+#        RespVar = "MRI WM Permeability"
+#      )
+#    ) %>%
+#    tidyr::pivot_longer(
+#      cols = -c(Var, RespVar)
+#    , names_to = "Covar"
+#    , values_to = "Coef"
+#    )
+#  , dplyr::bind_rows(
+#      p_mat %>%
+#      as_tibble(rownames = "Var") %>%
+#      dplyr::mutate(
+#        RespVar = "Albumin Index"
+#      )
+#    , p_mat_mri %>%
+#      as_tibble(rownames = "Var") %>%
+#      dplyr::mutate(
+#        RespVar = "MRI WM Permeability"
+#      )
+#    ) %>%
+#    tidyr::pivot_longer(
+#      cols = -c(Var, RespVar)
+#    , names_to = "Covar"
+#    , values_to = "pvals"
+#    )
+#  , by = c("Var", "RespVar", "Covar")
+#  ) %>%
+#  dplyr::mutate(
+#  #  Var = Var %>% stringr::str_replace_all(pattern = stringr::fixed("_"), replacement = " ")
+#  #, Var = Var %>% stringr::str_replace_all(c("fl" = "","csf" = "","t 1" = "flt-1"))
+#    pvals_stars =
+#      pvals %>%
+#      e_pval_stars(
+#        cutpoints = c(0, 0.001, 0.01, 0.05, 1)
+#      , symbols = c("***", "**", "*", " ")
+#      )
+#  ) %>%
+#  left_join(
+#    dat_var_label_matching
+#  ) %>%
+#  left_join(
+#    e_data_var_labels_table_from_data(dat_sheet)
+#  ) %>%
+#  dplyr::mutate(
+#    Label = Label |> factor()
+#  , Covar = Covar %>% factor(levels = n_col)
+#  )
+
+
+dat_plot <- dat_plot %>%
+  dplyr::mutate(
+    Label_covar = Label_covar %>%
+      # Plasma Cytokines - shorten the long MSD V-PLEX names
+      stringr::str_replace_all("Heparin Plasma IFN-γ MSD V-PLEX Proinflammatory Panel 1 Human Kit", "Plasma IFN-γ") %>%
+      stringr::str_replace_all("Heparin Plasma IL-10 MSD V-PLEX Proinflammatory Panel 1 Human Kit", "Plasma IL-10") %>%
+      stringr::str_replace_all("Heparin Plasma IL-12p70 MSD V-PLEX Proinflammatory Panel 1 Human Kit", "Plasma IL-12p70") %>%
+      stringr::str_replace_all("Heparin Plasma IL-13 MSD V-PLEX Proinflammatory Panel 1 Human Kit", "Plasma IL-13") %>%
+      stringr::str_replace_all("Heparin Plasma IL-2 MSD V-PLEX Proinflammatory Panel 1 Human Kit", "Plasma IL-2") %>%
+      stringr::str_replace_all("Heparin Plasma IL-4 MSD V-PLEX Proinflammatory Panel 1 Human Kit", "Plasma IL-4") %>%
+      stringr::str_replace_all("Heparin Plasma IL-6 MSD V-PLEX Proinflammatory Panel 1 Human Kit", "Plasma IL-6") %>%
+      stringr::str_replace_all("Heparin Plasma IL-8 MSD V-PLEX Proinflammatory Panel 1 Human Kit", "Plasma IL-8") %>%
+      stringr::str_replace_all("Heparin Plasma TNF-a MSD V-PLEX Proinflammatory Panel 1 Human Kit", "Plasma TNF-α") %>%
+      
+      # CSF Cytokines
+      stringr::str_replace_all("CSF Neuro IFN-g \\(ALL\\)", "CSF IFN-γ") %>%
+      stringr::str_replace_all("CSF Neuro IL-10 \\(ALL\\)", "CSF IL-10") %>%
+      stringr::str_replace_all("CSF IL-12p70", "CSF IL-12p70") %>%
+      stringr::str_replace_all("CSF IL-13", "CSF IL-13") %>%
+      stringr::str_replace_all("CSF IL-1b", "CSF IL-1β") %>%
+      stringr::str_replace_all("CSF IL-2", "CSF IL-2") %>%
+      stringr::str_replace_all("CSF IL-4", "CSF IL-4") %>%
+      stringr::str_replace_all("CSF IL-6", "CSF IL-6") %>%
+      stringr::str_replace_all("CSF IL-8", "CSF IL-8") %>%
+      stringr::str_replace_all("CSF TNF-a", "CSF TNF-α") %>%
+      
+      # CSF MMPs
+      stringr::str_replace_all("Csf MMP-10 \\(ALL\\)", "CSF MMP-10") %>%
+      stringr::str_replace_all("MSD CSF MMP-1", "CSF MMP-1") %>%
+      stringr::str_replace_all("MSD CSF MMP-2", "CSF MMP-2") %>%
+      stringr::str_replace_all("MSD CSF MMP-3", "CSF MMP-3") %>%
+      stringr::str_replace_all("MSD CSF MMP-9", "CSF MMP-9") %>%
+      
+      # Plasma MMPs
+      stringr::str_replace_all("Plasma MMP-1 \\(ALL\\)", "Plasma MMP-1") %>%
+      stringr::str_replace_all("Plasma MMP-10 \\(ALL\\)", "Plasma MMP-10") %>%
+      stringr::str_replace_all("Plasma MMP-2 \\(ALL\\)", "Plasma MMP-2") %>%
+      stringr::str_replace_all("Plasma MMP-3 \\(ALL\\)", "Plasma MMP-3") %>%
+      stringr::str_replace_all("Plasma MMP-9 \\(ALL\\)", "Plasma MMP-9") %>%
+      
+      # CSF Angiogenic Factors
+      stringr::str_replace_all("CSF bFGF", "CSF bFGF") %>%
+      stringr::str_replace_all("CSF Flt-1", "CSF Flt-1") %>%
+      stringr::str_replace_all("CSF Tie-2", "CSF Tie-2") %>%
+      stringr::str_replace_all("CSF VEGF-A", "CSF VEGF-A") %>%
+      stringr::str_replace_all("CSF VEGF-C", "CSF VEGF-C") %>%
+      stringr::str_replace_all("CSF VEGF-D", "CSF VEGF-D") %>%
+      
+      # Plasma Angiogenic Factors
+      stringr::str_replace_all("Plasma bFGF", "Plasma bFGF") %>%
+      stringr::str_replace_all("Plasma Flt-1", "Plasma Flt-1") %>%
+      stringr::str_replace_all("Plasma TIE2", "Plasma Tie-2") %>%
+      stringr::str_replace_all("Plasma VEGF-A", "Plasma VEGF-A") %>%
+      stringr::str_replace_all("Plasma VEGF-C", "Plasma VEGF-C") %>%
+      stringr::str_replace_all("Plasma VEGF-D", "Plasma VEGF-D") %>%
+      
+      # CSF Other markers
+      stringr::str_replace_all("CSF Neuro GFAP \\(ALL\\)", "CSF GFAP") %>%
+      stringr::str_replace_all("CSF Neuro NFL \\(ALL\\)", "CSF NFL") %>%
+      stringr::str_replace_all("CSF PlGF \\(ALL\\)", "CSF PlGF") %>%
+      stringr::str_replace_all("CSF IgG", "CSF IgG") %>%
+      stringr::str_replace_all("IgG Index", "IgG Index") %>%
+      stringr::str_replace_all("Myelin Basic Protein", "Myelin Basic Protein") %>%
+      
+      # Plasma Other markers
+      stringr::str_replace_all("Plasma Neuro GFAP \\(ALL\\)", "Plasma GFAP") %>%
+      stringr::str_replace_all("Plasma NFL \\(ALL\\)", "Plasma NFL") %>%
+      stringr::str_replace_all("Plasma PlGF \\(ALL\\)", "Plasma PlGF") %>%
+      stringr::str_replace_all("Serum IgG", "Serum IgG") %>%
+      stringr::str_replace_all("Plasma IL-1B \\(ALL\\)", "Plasma IL-1β") %>%
+      
+      # AD markers
+      stringr::str_replace_all("A Beta 42/40 ratio", "Aβ42/40 Ratio") %>%
+      stringr::str_replace_all("CSF p-Tau 181 \\(ALL\\)", "CSF p-Tau 181") %>%
+      stringr::str_replace_all("Plasma Neuro A beta 40 \\(ALL\\)", "Plasma Aβ40") %>%
+      stringr::str_replace_all("Plasma Neuro A Beta 42 \\(ALL\\)", "Plasma Aβ42") %>%
+      stringr::str_replace_all("plasma p-Tau 217 \\(ALL\\)", "Plasma p-Tau 217") %>%
+      stringr::str_replace_all("Plasma p-Tau 181 \\(ALL\\)", "Plasma p-Tau 181") %>%
+      
+      # Catch-all: Remove any remaining (ALL) and clean up extra spaces
+      stringr::str_replace_all("\\s*\\(ALL\\)\\s*", "") %>%
+      stringr::str_replace_all("\\s+", " ") %>%
+      stringr::str_trim()|>
+      
+      # MRI markers
+      stringr::str_replace_all("DTI PSMD", "DTI PSMD") %>%
+      stringr::str_replace_all("Hippocampal volume \\(percent\\)", "Hippocampal Volume (%)") %>%
+      stringr::str_replace_all("Mean cortical thickness \\(mm\\)", "Mean Cortical Thickness (mm)") %>%
+      stringr::str_replace_all("Mean Free Water", "Mean Free Water")
+    
+  , Label_covar = Label_covar |> str_replace(pattern = "^CSF |^Plasma ", replacement = "")
+  )
+
+
+# # p-value plot
+# library(ggplot2)
+# #p1 <- ggplot(data = dat_plot, aes(x = Covar, y = Label, fill = Coef))  # y = Var
+# p1 <- ggplot(data = dat_plot, aes(x = term, y = Label_covar, fill = Coef))  # y = Var
+# #p1 <- p1 + theme_bw()
+# p1 <- p1 + geom_tile(na.rm = TRUE)
+# p1 <- p1 + scale_y_discrete(limits = rev)
+# #p1 <- p1 + scale_fill_gradientn(limits = c(-1.0, 0.6), values = scales::rescale(c(0,0.1,1)), colors = c("#000000", "#AAAAAA", "#DDDDDD"), breaks = c(0, 0.1, 0.5, 1), na.value = "white")
+# p1 <- p1 + scale_fill_gradient2(low = "blue", mid = "white", high = "red", breaks = seq(-100, 100, by = 2), na.value = "gray90")
+# p1 <- p1 + geom_text(aes(label = pvals_stars), vjust = 0.5, colour = "white")
+# p1 <- p1 + geom_text(data = dat_plot |> dplyr::filter(term == "(Intercept)")
+#               , aes(label = n), hjust = 0, vjust = 0.5, colour = "black"
+#               )
+# #p1 <- p1 + facet_grid(. ~ RespVar, space = "free", scales = "free_y", drop = TRUE)
+# p1 <- p1 + facet_grid(Type ~ Label_resp, space = "free", scales = "free_y", drop = TRUE)
+# p1 <- p1 + theme(#axis.text.x = element_text(angle = 90, vjust = 0, hjust = 1)
+#                axis.text.y = element_text(hjust = 0)
+#             )  #, panel.grid.major = element_blank(), panel.grid.minor = element_blank())
+# p1 <- p1 + theme(axis.text.x = element_text(angle = 45, vjust = 1, hjust = 1)) # rotate labels
+# p1 <- p1 + theme(axis.text.y = element_text(hjust = 1))
+# #p1 <- p1 + theme(legend.key.height = unit(0.30, "in"))
+# p1 <- p1 + theme(plot.caption = element_text(hjust = 0), plot.caption.position =  "plot") # caption left align
+# p1 <- p1 + theme(legend.position = "bottom") # "none"
+# p1 <- p1 + theme(legend.key.height = unit(0.1, "in"), legend.key.width = unit(0.4, "in"))
+# 
+# if (lm_criterion == c("AIC", "BIC")[1]) {
+#   p1 <- p1 + labs(
+#                   title = "Models selected by AIC"
+#                   )
+# }
+# if (lm_criterion == c("AIC", "BIC")[2]) {
+#   p1 <- p1 + labs(
+#                   title = "Models selected by BIC"
+#                   )
+# }
+# p1 <- p1 + labs(
+#               #, subtitle = "Longitudinal mixed model"
+#                 y = "Standardized covariates (\"X\")"
+#               , x = "Model covariates"
+#               , fill = "Model\nCoefficients  "  # "FDR\np-value"
+#               , caption = paste0(
+#                             "p-value stars:  (blank): p >= 0.05;   *: p < 0.05;   **: p < 0.01;   *** : p < 0.001"
+#                           , "\np-values are uncorrected for family-wise Type-I error rate."
+#                           #, "\nModels displayed are those where X variable is retained after model selection"
+#                           )
+#               )
+# 
+# print(p1)
+
+
+# If you need two plots run this code 
+
+# ---- shared scale so BOTH panels map colors identically ----
+# truncate Coef for color scale, so other colors are darker
+# dat_plot <-
+#   dat_plot |>
+#   mutate(
+#     Coef = ifelse(abs(Coef) > 5, sign(Coef) * 5, Coef)
+#   )
+fill_limits <- c(-3, +3) #range(dat_plot$Coef, na.rm = TRUE) 
+fill_breaks <- seq(floor(fill_limits[1]), ceiling(fill_limits[2]), by = 1)
+
+
+dat_plot <- dat_plot %>%
+  dplyr::mutate(
+    pvals_stars = as.character(pvals_stars),           # ← convert first
+    term        = dplyr::if_else(term == "(Intercept)", "n", as.character(term)),
+    Coef        = ifelse(term == "n", NA_real_,        Coef),
+    pvals_stars = ifelse(term == "n", NA_character_,   pvals_stars)
+  )
+# Standardize the labels first
+dat_plot <- dat_plot %>%
+  dplyr::mutate(
+    Label_covar = Label_covar %>%
+      stringr::str_replace_all("pTau 181", "p-Tau 181") %>%
+      stringr::str_replace_all("IFN-g", "IFN-γ") %>%
+      stringr::str_replace_all("Neuro NFl", "NFL") %>%
+      stringr::str_replace_all("NFl", "NFL")
+  )
+
+# Now define the correct order with exact matches
+biomarker_order <- c(
+  # AD markers
+  "Aβ42/40 Ratio",
+  "p-Tau 181",
+  "Aβ40",
+  "Aβ42",
+  "p-Tau 217",
+  
+  # Angiogenic factors
+  "bFGF",
+  "Flt-1",
+  "PlGF",
+  "Tie-2",
+  "VEGF-A",
+  "VEGF-C",
+  "VEGF-D",
+  
+  # Cytokines - order IL numerically
+  "IFN-γ",
+  "IL-1β",
+  "IL-2",
+  "IL-4",
+  "IL-6",
+  "IL-8",
+  "IL-10",
+  "IL-12p70",
+  "IL-13",
+  "TNF-α",
+  
+  # MMPs - order numerically
+  "MMP-1",
+  "MMP-2",
+  "MMP-3",
+  "MMP-9",
+  "MMP-10",
+  
+  # Other markers
+  "GFAP",
+  "IgG",
+  "IgG Index",
+  "Myelin Basic Protein",
+  "NFL",
+  "Serum IgG",
+  
+  # MRI markers
+  "DTI PSMD",
+  "Hippocampal Volume (%)",
+  "Mean Cortical Thickness (mm)",
+  "Mean Free Water"
+)
+
+# Now apply factor ordering
+dat_plot <- dat_plot %>%
+  dplyr::mutate(
+    Label_covar = factor(Label_covar, levels = biomarker_order)
+  )
+
+# Verify no NAs
+dat_plot %>% 
+  dplyr::distinct(Label_covar, Type_short) %>% 
+  dplyr::arrange(Type_short, Label_covar) %>% 
+  print(n = Inf)
+
+# Recreate dat_plot_modified from dat_plot (which has correct Label_resp)
+dat_plot_modified <- dat_plot %>%
+  dplyr::mutate(
+    term = dplyr::if_else(term == "(Intercept)", "n", as.character(term)),
+    Coef = dplyr::if_else(term == "n", NA_real_, Coef),
+    # Set Label_resp factor with correct levels - Albumin Index first
+  Label_resp = factor(Label_resp, levels = c("Albumin Index", "3T Permeability (Total)",
+                                            "CSF GFAP", "Plasma GFAP"))
+  )
+
+
+dat_plot_modified <- dat_plot %>%
+  dplyr::mutate(
+    term        = dplyr::if_else(term == "(Intercept)", "n", as.character(term)),
+    Coef        = dplyr::if_else(term == "n", NA_real_, Coef),
+    Label_resp  = Label_resp %>%
+      as.character() %>%
+      stringr::str_replace_all("CSF Neuro GFAP \\(ALL\\)", "CSF GFAP") %>%
+      stringr::str_replace_all("Plasma Neuro GFAP \\(ALL\\)", "Plasma GFAP") %>%
+      stringr::str_replace_all("\\s*\\(ALL\\)\\s*", "") %>%
+      stringr::str_trim(),
+    Label_resp  = factor(Label_resp, levels = c(
+      "Albumin Index", 
+      "3T Permeability (Total)", 
+      "CSF GFAP", "Plasma GFAP",  
+      "PC1 Composite Inflammatory Score"
+    ))
+  )
+
+# Verify all 4 levels present, no NAs
+dat_plot_modified %>% distinct(resp, Label_resp)
+
+
+
+
+
+
+
+# Update create_plot function with right-aligned n values and Qalb before Ktrans
+create_plot <- function(dat, plot_title,
+                        show_caption = TRUE,
+                        show_legend = TRUE) {
+  
+  p <- ggplot(dat, aes(x = term, y = Label_covar, fill = Coef)) +
+    geom_tile(na.rm = TRUE) +
+    
+    # Add white/neutral tiles for the n column
+    geom_tile(
+      data = dat %>% dplyr::filter(term == "n"),
+      fill = "white",
+      color = "gray80"
+    ) +
+    
+    # Set the order of x-axis with "n" first
+    scale_x_discrete(limits = c("n", "Age", "Gender", "X", "Age:X", "Gender:X")) +
+    scale_y_discrete(limits = rev) +
+    scale_fill_gradient2(
+      low = "blue",
+      mid = "white",
+      high = "red",
+      limits = fill_limits,
+      breaks = fill_breaks,
+      na.value = "gray90",
+      oob = scales::squish
+    ) +
+    
+    # Show p-value stars for non-n columns
+    geom_text(
+    data = dat %>% dplyr::filter(term != "n", !is.na(pvals_stars)),
+    aes(label = pvals_stars),
+    vjust = 0.5, colour = "gray20"
+            ) +
+    
+    # Show n values in the "n" column - RIGHT ALIGNED
+    geom_text(
+      data = dat %>% dplyr::filter(term == "n"),
+      aes(label = n),
+      hjust = 1, vjust = 0.5, colour = "black", nudge_x = 0.4
+    ) +
+    
+    facet_grid(
+      Type_short ~ Label_resp,
+      space = "free",
+      scales = "free_y",
+      drop = TRUE
+    ) +
+    
+    theme(
+      axis.text.x = element_text(angle = 45, vjust = 1, hjust = 1),
+      axis.text.y = element_text(hjust = 1),
+      legend.position = if (show_legend) "bottom" else "none",
+      legend.key.height = unit(0.15, "in"),
+      legend.key.width  = unit(0.6, "in"),
+      plot.caption = element_text(hjust = 0),
+      plot.caption.position = "plot"
+    ) +
+    
+    labs(
+      title = plot_title,
+      x = "Model covariates",
+      y = "Standardized covariates (\"X\")",
+      fill = if (show_legend) "Model\nCoefficients" else NULL,
+      caption = if (show_caption)
+        paste0(
+          "p-value stars: (blank): p >= 0.05; *: p < 0.05; **: p < 0.01; *** : p < 0.001",
+          "\np-values are uncorrected for family-wise Type-I error rate."
+        )
+      else NULL
+    )
+  
+  p
+}
+
+
+# Build panels using modified data
+p1_csf_mri <- create_plot(
+  dat      = dat_plot_modified %>% dplyr::filter(Group %in% c("CSF", "MRI")), 
+  plot_title = "CSF and MRI",
+  show_caption = FALSE,
+  show_legend  = FALSE
+)
+
+p2_plasma <- create_plot(
+  dat      = dat_plot_modified %>% dplyr::filter(Group == "Plasma"),
+  plot_title = "Plasma",
+  show_caption = FALSE,
+  show_legend  = TRUE
+)
+
+
+# ---- combine ----
+library(patchwork)
+# p_combined <- p1_csf_mri + p2_plasma + plot_layout(ncol = 2) +
+#     patchwork::plot_annotation(
+#       title       = "Models selected by BIC"
+#     # , subtitle    = text_formula_sel
+#     # , caption     = 
+#     , tag_levels  = "A"
+#     , theme = theme(plot.caption = element_text(hjust = 0)) # Default is hjust=1, Caption align left
+#     )
+
+plot_design <-
+    "AB
+     AB
+     AB
+     AB
+     AB
+     AB
+     AB
+     AB
+     AB
+     AB
+     AB
+     AB
+     AB
+     AB
+     AB
+     AB
+     AB
+     CC"
+  
+p_combined_AIC <- p1_csf_mri + p2_plasma + guide_area() +
+  plot_layout(guides = "collect") + 
+  patchwork::plot_layout(design = plot_design) +
+    patchwork::plot_annotation(
+      title       = "Models selected by AIC"
+    # , subtitle    = text_formula_sel
+    , caption     = paste0("p-value stars: (blank): p >= 0.05;   *: p < 0.05;   **: p < 0.01;   *** : p < 0.001",
+               "\np-values are uncorrected for family-wise Type-I error rate.")
+    , tag_levels  = "A"
+    , theme = theme(plot.caption = element_text(hjust = 0)) # Default is hjust=1, Caption align left
+    )
+
+print(p_combined_AIC)
+
+ggsave(
+    "All_figures_for_paper/p_combined_AIC.png"
+  , plot   = p_combined_AIC
+  , width  = 15
+  , height = 10
+  ## png, jpeg
+  , dpi    = 300
+  , bg     = "white"
+  ## pdf
+  #, units  = "in"
+  #, useDingbats = FALSE  # https://stackoverflow.com/questions/9992275/ggplot2-pdf-import-in-adobe-illustrator-missing-font-adobepistd
+  )
+
+
+
+
+# create PDF
+# ggsave(
+#     "All_figures_for_paper/p_combined.pdf"
+#   , plot   = p_combined
+#   , width  = 10
+#   , height = 10
+#   ## png, jpeg
+#   #, dpi    = 300
+#   #, bg     = "white"
+#   ## pdf
+#   , units  = "in"
+#   , useDingbats = FALSE  # https://stackoverflow.com/questions/9992275/ggplot2-pdf-import-in-adobe-illustrator-missing-font-adobepistd
+#   )
+
+## #p_alb_mriperm_coef_pval <- p1
+##
+## # ggsave(
+## #     paste0("plot_alb_mriperm_coef_pval_", lm_criterion, ".png")
+## #   , plot   = p1
+## #   , width  = 6
+## #   , height = 8
+## #   ## png, jpeg
+## #   , dpi    = 300
+## #   , bg     = "white"
+## #   ## pdf
+## #   #, units  = "in"
+## #   #, useDingbats = FALSE  # https://stackoverflow.com/questions/9992275/ggplot2-pdf-import-in-adobe-illustrator-missing-font-adobepistd
+## #   )
+## # ggsave(
+## #     paste0("plot_alb_mriperm_coef_pval_", lm_criterion, ".pdf")
+## #   , plot   = p1
+## #   , width  = 6
+## #   , height = 8
+## #   ## png, jpeg
+## #   #, dpi    = 300
+## #   #, bg     = "white"
+## #   ## pdf
+## #   , units  = "in"
+## #   , useDingbats = FALSE  # https://stackoverflow.com/questions/9992275/ggplot2-pdf-import-in-adobe-illustrator-missing-font-adobepistd
+## #   )
+
+
+
+
+
+# this is the code to generate the demographic table for paper 
+
+
+# ---- packages ----
+library(dplyr)
+library(forcats)
+library(gtsummary)
+library(dunn.test)
+
+# ---- choose dataset & diagnosis variable ----
+# Use your raw-scale data (before z-scoring)
+dat_demo <- dat_sub
+
+
+dx_var <- if ("dx_biological" %in% names(dat_demo)) "dx_biological" else "dx_current"
+
+# keep only rows with a diagnosis
+dat_demo <- dat_demo %>% filter(!is.na(.data[[dx_var]]))
+
+# order dx levels as in the paper (adjust these to match your actual levels)
+dx_levels <- c("AD", "LA", "Mixed", "SIVD", "MI")
+actual_levels <- unique(dat_demo[[dx_var]])
+dx_levels_present <- dx_levels[dx_levels %in% actual_levels]
+
+if (length(dx_levels_present) > 0) {
+  dat_demo[[dx_var]] <- factor(dat_demo[[dx_var]], levels = dx_levels_present)
+}
+
+# make sure Sex is a labeled factor (Female/Male)
+dat_demo <- dat_demo %>%
+  mutate(
+    sex = forcats::fct_relevel(as.factor(sex), "Female", "Male")
+  )
+
+# ---- Check which variables have data ----
+# First, let's identify which variables actually have non-missing data
+vars_to_check <- c("age", "sex", "demo_edu_yrs", "fl_albumin_index_log2", "mri_perm_3t_tot_log2")
+
+# Check completeness of each variable
+completeness_check <- dat_demo %>%
+  select(all_of(c(dx_var, vars_to_check))) %>%
+  summarise(across(everything(), ~sum(!is.na(.x)))) %>%
+  pivot_longer(everything(), names_to = "variable", values_to = "non_missing_count")
+
+print("Variable completeness:")
+print(completeness_check)
+
+# Create list of variables with sufficient data (at least 10 non-missing observations)
+vars_with_data <- completeness_check %>%
+  filter(non_missing_count >= 10) %>%
+  pull(variable) %>%
+  setdiff(dx_var)  # remove the grouping variable
+
+print("Variables with sufficient data:")
+print(vars_with_data)
+
+# ---- Create table with available variables ----
+# Build the variable list and labels dynamically
+table_vars <- c(dx_var, vars_with_data)
+
+# Create label list for available variables
+label_list <- list()
+# if ("age" %in% vars_with_data) label_list[["age"]] <- "Age"
+# if ("sex" %in% vars_with_data) label_list[["sex"]] <- "Sex"
+# if ("demo_edu_yrs" %in% vars_with_data) label_list[["demo_edu_yrs"]] <- "Years of education"
+# if ("fl_albumin_index" %in% vars_with_data) label_list[["fl_albumin_index"]] <- "Albumin Index"
+# if ("fl_albumin_index_log2" %in% vars_with_data) label_list[["fl_albumin_index_log2"]] <- "Albumin Index (log2)"
+# if ("mri_perm_3t_tot" %in% vars_with_data) label_list[["mri_perm_3t_tot"]] <- "MRI WM Permeability"
+
+# ---- Table 1 ----
+tbl1 <- dat_demo %>%
+  select(all_of(table_vars)) %>%
+  gtsummary::tbl_summary(
+    by = !!rlang::sym(dx_var),
+    type = if("sex" %in% vars_with_data) list(sex ~ "categorical") else NULL,
+    statistic = list(
+      all_continuous() ~ "{median} [{p25}; {p75}]",
+      all_categorical() ~ "{n} ({p}%)"
+    ),
+    digits = all_continuous() ~ 2,
+    missing = "no",
+    label = label_list
+  ) %>%
+  add_overall(last = FALSE) %>%
+  add_n()
+
+# Only add p-values if we have more than one diagnostic group
+n_groups <- length(unique(dat_demo[[dx_var]][!is.na(dat_demo[[dx_var]])]))
+
+if (n_groups > 1) {
+  tbl1 <- tbl1 %>%
+    add_p(
+      test = list(
+        all_continuous() ~ "kruskal.test",
+        all_categorical() ~ "chisq.test"
+      )
+    )
+}
+
+tbl1 <- tbl1 %>%
+  modify_caption("**Table 1. Demographic and permeability characteristics overall and by diagnostic category.**") %>%
+  bold_labels()
+
+# Create GT table with footnote
+tbl1_gt <- tbl1 %>%
+  as_gt() %>%
+  gt::tab_source_note(
+    source_note = paste(
+      "Table values: Median [Q1; Q3] for numeric values and n (%) for categorical values.",
+      if(n_groups > 1) "P-values from Kruskal–Wallis (continuous) and chi-square with continuity correction when applicable (categorical)." else "",
+      "AD: Alzheimer's disease; LA: leukoaraiosis; Mixed: mixed dementia; SIVD: subcortical ischemic vascular dementia; MI: myocardial infarction."
+    )
+  )
+
+# Display the table
+tbl1_gt
+
+
+library(gt)
+gtsave(tbl1_gt, "table1.rtf")
+
+#or 
+
+# library(gt)
+# 
+# # big canvas = crisp when scaled down (≈ 2000–3000 px wide)
+# gtsave(
+#   data = tbl1_gt,
+#   filename = "table1.png",
+#   vwidth   = 2400,   # ~8 in at 300 dpi equivalent
+#   vheight  = 1600,   # adjust to your table’s height
+#   zoom     = 2       # increases pixel density
+# )
+# 
+# # Optional: TIFF (journal-preferred). Convert PNG → TIFF.
+# library(magick)
+# image_read("table1.png") |>
+#   image_write("table1.tiff", format = "tiff")
+
+```
+
+
+
+
+# ╔══════════════════════════════════════════════════════════════════════════════╗
+# ║           COHORT CHARACTERIZATION TABLE                                     ║
+# ╚══════════════════════════════════════════════════════════════════════════════╝
+#
+# PURPOSE:
+#   Identify which research cohort each participant belongs to and report
+#   how many participants per cohort had each key BBB permeability measure
+#   available. This is reported in the manuscript Methods section to describe
+#   the multi-cohort nature of the dataset.
+#
+# BACKGROUND — THREE COHORTS IN THIS DATASET:
+#   1. MarkVCID  — Multi-center vascular contributions to cognitive impairment
+#                  and dementia study. Identified by: markvcid_id
+#   2. VCI       — Vascular Cognitive Impairment cohort (UNM local).
+#                  Identified by: ptid_vci
+#   3. ADRC      — Alzheimer's Disease Research Center cohort (UNM).
+#                  Identified by: ptid_adrc (when markvcid_id is NA)
+#
+# PARTICIPANT ID PREFIXES IN dat_sub:
+#   UP-xxx  → VCI cohort
+#   VCI-xxx → VCI cohort
+#   VDP-xxx → MarkVCID cohort
+#
+# KEY BIOMARKER AVAILABILITY BEING CHECKED:
+#   fl_albumin_index_log2  — Requires lumbar puncture (CSF collection)
+#   mri_perm_3t_tot        — Requires contrast-enhanced 3T MRI scan
+#   Not all participants had both procedures, so availability varies by cohort
+#
+# STEPS IN THIS CODE:
+#   1. Inspect identifier columns to understand cohort assignment logic
+#   2. Assign each participant to exactly one cohort using case_when priority:
+#        MarkVCID > VCI > VCID2 > ADRC > Other
+#   3. Merge cohort assignment into dat_sub (the analysis dataset)
+#   4. Count participants and biomarker availability per cohort
+#   5. Display as a formatted GT table for the manuscript
+#
+# OUTPUT:
+#   dat_sub_with_cohort  — dat_sub with cohort column added
+#   summary_table        — formatted GT table of biomarker availability by cohort
+#
+# NOTE:
+#   The hardcoded numbers in summary_table (MarkVCID: N=32, VCI: N=117) were
+#   verified from the summarise() output above. If the dataset changes,
+#   re-run the summarise() step and update these numbers accordingly.
+# ─────────────────────────────────────────────────────────────────────────────
+
+```{r}
+# Look at the identifier columns to understand cohort structure
+dat_all %>%
+  select(ptid, ptid_vci, ptid_vcid2, ptid_adrc, markvcid_id) %>%
+  head(20)
+
+# Check which identifier columns are populated (non-NA) for different participants
+dat_all %>%
+  summarise(
+    n_total = n(),
+    n_with_adrc = sum(!is.na(ptid_adrc)),
+    n_with_markvcid = sum(!is.na(markvcid_id)),
+    n_with_vci = sum(!is.na(ptid_vci)),
+    n_with_vcid2 = sum(!is.na(ptid_vcid2))
+  )
+
+
+# Create a cohort variable based on which specific IDs exist
+dat_all_cohort <- dat_all %>%
+  mutate(
+    cohort = case_when(
+      !is.na(markvcid_id) ~ "MarkVCID",
+      !is.na(ptid_vci) ~ "VCI",
+      !is.na(ptid_vcid2) ~ "VCID2",
+      !is.na(ptid_adrc) & is.na(markvcid_id) ~ "ADRC",  # ADRC only if not also MarkVCID
+      TRUE ~ "Other"
+    )
+  )
+
+# Check the distribution
+table(dat_all_cohort$cohort)
+
+
+
+# Get unique ptid with their cohort from dat_all
+ptid_cohort_map <- dat_all_cohort %>%
+  select(ptid, cohort) %>%
+  distinct() %>%
+  # Keep one row per ptid (in case of duplicates, take first)
+  group_by(ptid) %>%
+  slice(1) %>%
+  ungroup()
+
+# Merge with your dat_sub
+dat_sub_with_cohort <- dat_sub %>%
+  left_join(ptid_cohort_map, by = "ptid")
+
+# Check the results
+table(dat_sub_with_cohort$cohort)
+
+
+# Count how many have albumin index by cohort
+dat_sub_with_cohort %>%
+  group_by(cohort) %>%
+  summarise(
+    n_participants = n(),
+    n_with_albumin_index = sum(!is.na(fl_albumin_index_log2)),
+    n_with_mri_perm = sum(!is.na(mri_perm_3t_tot))
+
+  )
+# Your summary table
+summary_table <- data.frame(
+  cohort = c("MarkVCID", "VCI"),
+  n_participants = c(32, 117),
+  n_with_albumin_index = c(31, 97),
+  n_with_mri_perm = c(23, 50)
+)
+
+library(gt)
+
+summary_table %>%
+   gt() %>%
+  cols_label(
+    cohort = "Cohort",
+    n_participants = "N",
+    n_with_albumin_index = "Albumin Index",
+    n_with_mri_perm = "MRI Permeability"
+  ) %>%
+  tab_spanner(
+    label = "Albumin Index"
+  ) %>%
+  tab_spanner(
+    label = "MRI Permeability"
+  ) %>%
+  tab_header(
+    title = "Biomarker Availability by Cohort"
+  )
+
+```
+
+
+# This code is for checking the 3T and 3T log with Diagnosis plots 
+```{r}
+library(ggplot2)
+library(dplyr)
+
+dat_plot_3T_diagnosis <- dat_sub %>%
+  filter(!is.na(dx_current), !is.na(mri_perm_3t_tot))
+
+
+p_perm_dx <- ggplot(dat_plot_3T_diagnosis, aes(x = dx_current, y = mri_perm_3t_tot, fill = dx_current)) +
+  geom_violin(trim = FALSE, alpha = 0.35) +
+  geom_boxplot(width = 0.15, outlier.shape = NA, alpha = 0.7) +
+  geom_jitter(width = 0.12, alpha = 0.4, size = 1) +
+  labs(x = "Diagnosis", y = "MRI BBB permeability (3T total)",
+       title = "BBB permeability by diagnosis") +
+  theme_minimal(base_size = 12) +
+  theme(legend.position = "none")
+p_perm_dx
+
+
+dat_plot_3Tlog2_diagnosis <- dat_sub %>%
+  filter(!is.na(dx_current), !is.na(mri_perm_3t_tot_log2))
+
+
+p_perm_dx <- ggplot(dat_plot_3Tlog2_diagnosis, aes(x = dx_current, y = mri_perm_3t_tot_log2, fill = dx_current)) +
+  geom_violin(trim = FALSE, alpha = 0.35) +
+  geom_boxplot(width = 0.15, outlier.shape = NA, alpha = 0.7) +
+  geom_jitter(width = 0.12, alpha = 0.4, size = 1) +
+  labs(x = "Diagnosis", y = "MRI BBB permeability (3Tlog2 total)",
+       title = "BBB permeability by diagnosis") +
+  theme_minimal(base_size = 12) +
+  theme(legend.position = "none")
+p_perm_dx
+
+```
+
+
+#Individual plots associated with significant covariates.
+```{r}
+dat_plot_sub_indy <-
+  dat_plot |>
+  dplyr::filter(
+    term == "X"
+  )
+
+plot_results <- list()
+
+# Interpretations output file
+fn_output <-
+  file.path(
+        "All_figures_for_paper"
+      , "interpretations.txt"
+      )
+output_write <-
+  c(
+    fn_output
+  , "\n\n"
+  )
+readr::write_lines(x = output_write, file = fn_output, append = FALSE)
+
+
+for (i_row in seq_len(nrow(dat_plot_sub_indy))) {
+  ## i_row = 1
+
+  var_resp  <- dat_plot_sub_indy$resp [i_row]
+  var_covar <- dat_plot_sub_indy$covar[i_row]
+
+  plot_results[[ i_row ]] <-
+    results[[var_resp]][[var_covar]][["plot_lm_fit_red_BIC"]]
+  
+  fit_contrasts <-
+    e_plot_model_contrasts(
+      fit                = results[[var_resp]][[var_covar]]$lm_fit_red_BIC
+    , dat_cont           = results[[var_resp]][[var_covar]]$dat_lm
+    , sw_print           = FALSE
+    , sw_table_in_plot   = FALSE
+    , sw_TWI_plots_keep  = "singles"
+    , sw_quantile_type   = 1
+    , sw_produce_plots = c(TRUE, FALSE)[2]
+    )
+  #fit_contrasts$tables  # to print tables
+  #fit_contrasts$plots   # to print plots
+  #fit_contrasts$text    # to print caption text
+  fit_contrasts$interp  # to print interpretation text
+  
+  output_write <-
+    c(
+      "\n\n"
+    , "====="
+    , "\nResponse:  "
+    , var_resp
+    , "Predictor:  "
+    , var_covar
+    , ""
+    , "interpratations:\n"
+    , paste(
+        fit_contrasts$interp |> names()
+      , fit_contrasts$interp |> unlist()
+      , sep = "\n"
+      , collapse = "\n\n"
+      )
+    )
+    readr::write_lines(x = output_write, file = fn_output, append = TRUE)
+} # i_row
+    
+
+p_arranged <-
+  cowplot::plot_grid(
+    plotlist           = plot_results
+  , labels             = "AUTO"
+  , label_size         = 10
+  , label_fontface     = "bold"
+  , label_x            = 0.05
+  , label_y            = 1.03
+  , nrow               = 5
+  , ncol               = 10
+  )
+ggsave(
+    paste0("All_figures_for_paper/plot_results_indy_AIC", ".png")
+  , plot   = p_arranged
+  , width  = 20
+  , height = 16
+  ## png, jpeg
+  , dpi    = 300
+  , bg     = "white"
+  ## pdf
+  #, units  = "in"
+  #, useDingbats = FALSE
+  )
+# 
+# ── Global panel size — same for every figure in the paper ───────────────────
+PANEL_IN <- 4.5
+
+# ── helper: save a plot_grid chunk ────────────────────────────────────────────
+save_panel_chunk <- function(plot_list, labels, filename, n_col = 4) {
+
+  # Add top margin so label sits above content, not over it
+  plot_list <- lapply(plot_list, function(p) {
+    p + ggplot2::theme(
+      plot.margin = ggplot2::margin(t = 22, r = 5, b = 5, l = 5, unit = "pt")
+    )
+  })
+
+  n_plots  <- length(plot_list)
+  n_row    <- ceiling(n_plots / n_col)
+  w        <- n_col * PANEL_IN
+  h        <- n_row * PANEL_IN
+
+  p <- cowplot::plot_grid(
+      plotlist         = plot_list
+    , labels           = labels
+    , label_size       = 14
+    , label_fontface   = "bold"
+    , label_x          = 0
+    , label_y          = 0.995
+    , nrow             = n_row
+    , ncol             = n_col
+    , align            = "hv"
+    , axis             = "tblr"
+    )
+
+  ggsave(
+      filename
+    , plot      = p
+    , width     = w
+    , height    = h
+    , dpi       = 300
+    , bg        = "white"
+    , limitsize = FALSE
+    )
+  message("Saved: ", filename, " | ", n_plots, " panels | ", w, "x", h, " in")
+}
+
+# ── Filter to significant X terms only ───────────────────────────────────────
+dat_plot_sub_indy <-
+  dat_plot |>
+  dplyr::filter(term == "X")
+
+plot_results <- list()
+
+# ── Interpretations output file ───────────────────────────────────────────────
+fn_output <- file.path("All_figures_for_paper", "interpretations.txt")
+readr::write_lines(x = c(fn_output, "\n\n"), file = fn_output, append = FALSE)
+
+# ── Main loop: collect plots and write interpretations ────────────────────────
+for (i_row in seq_len(nrow(dat_plot_sub_indy))) {
+  var_resp  <- dat_plot_sub_indy$resp [i_row]
+  var_covar <- dat_plot_sub_indy$covar[i_row]
+
+  plot_results[[ i_row ]] <-
+    results[[var_resp]][[var_covar]][["plot_lm_fit_red_BIC"]]
+
+  fit_contrasts <-
+    e_plot_model_contrasts(
+      fit               = results[[var_resp]][[var_covar]]$lm_fit_red_BIC
+    , dat_cont          = results[[var_resp]][[var_covar]]$dat_lm
+    , sw_print          = FALSE
+    , sw_table_in_plot  = FALSE
+    , sw_TWI_plots_keep = "singles"
+    , sw_quantile_type  = 1
+    , sw_produce_plots  = c(TRUE, FALSE)[2]
+    )
+
+  output_write <-
+    c(
+      "\n\n"
+    , "====="
+    , "\nResponse:  "
+    , var_resp
+    , "Predictor:  "
+    , var_covar
+    , ""
+    , "interpratations:\n"
+    , paste(
+        fit_contrasts$interp |> names()
+      , fit_contrasts$interp |> unlist()
+      , sep      = "\n"
+      , collapse = "\n\n"
+      )
+    )
+  readr::write_lines(x = output_write, file = fn_output, append = TRUE)
+} # i_row
+
+# ── Split plot_results by response variable ───────────────────────────────────
+idx_albumin <- which(dat_plot_sub_indy$resp == "fl_albumin_index_log2")
+idx_ktrans  <- which(dat_plot_sub_indy$resp == "mri_perm_3t_tot_log2")
+
+plots_albumin <- plot_results[ idx_albumin ]
+plots_ktrans  <- plot_results[ idx_ktrans  ]
+
+n_albumin <- length(plots_albumin)
+n_ktrans  <- length(plots_ktrans)
+
+cat("Albumin panels:", n_albumin, "| Ktrans panels:", n_ktrans, "\n")
+
+# ── Fig 3a: Albumin panels A1–A20 ────────────────────────────────────────────
+split_at <- 20
+
+save_panel_chunk(
+    plot_list = plots_albumin[ 1:min(split_at, n_albumin) ]
+  , labels    = paste0("A", 1:min(split_at, n_albumin))
+  , filename  = "All_figures_for_paper/Fig3a_Albumin_Index.png"
+  , n_col     = 4
+  )
+
+# ── Fig 3b: Albumin panels A21–end ───────────────────────────────────────────
+if (n_albumin > split_at) {
+  idx_rest <- (split_at + 1):n_albumin
+  save_panel_chunk(
+      plot_list = plots_albumin[ idx_rest ]
+    , labels    = paste0("A", idx_rest)
+    , filename  = "All_figures_for_paper/Fig3b_Albumin_Index.png"
+    , n_col     = 4
+    )
+}
+
+# ── Fig 4: Ktrans panels B1–end ──────────────────────────────────────────────
+save_panel_chunk(
+    plot_list = plots_ktrans
+  , labels    = paste0("B", 1:n_ktrans)
+  , filename  = "All_figures_for_paper/Fig4_Ktrans_3T.png"
+  , n_col     = 4
+  )
+
+# cowplot::plot_grid(
+#     plotlist         = p_list
+#   , align            = c("none", "h", "v", "hv")[4]
+#   , axis             = c("none", "l", "r", "t", "b", "lr", "tb", "tblr")[1]
+#   , nrow             = 1
+#   , ncol             = NULL
+#   , rel_widths       = 1
+#   , rel_heights      = 1
+#   , labels           = "AUTO" # "auto", c("A", "B")
+#   , label_size       = 14
+#   , label_fontfamily = NULL
+#   , label_fontface   = "bold"
+#   , label_colour     = NULL
+#   , label_x          = 0
+#   , label_y          = 1
+#   , hjust            = -0.5
+#   , vjust            = 1.5
+#   , scale            = 1
+#   , greedy           = TRUE
+#   , byrow            = TRUE
+# )
+
+```
+
+
+
+## Drop extreme outliers
+
+```{r chunk-012, fig.height = 4, fig.width = 10}
+var_list_plot <-
+  c(
+    Var$csf
+  , Var$plasma
+  , Var$mri
+  )
+  dat_var_label_matching$Var
+
+par(mfrow=c(1,3))
+for (i_plot in 1:length(var_list_plot)) {
+  ## i_plot = 1
+  #if (i_plot > 3) {next}
+
+  if( all(is.na(dat_sub[[ var_list_plot[i_plot] ]])) ) {
+    next
+  }
+
+  plot(
+    x     = 1:nrow(dat_sub)
+  , y     = dat_sub[[ var_list_plot[i_plot] ]]
+  , type  = "p"
+  , main  = paste0("Before: ", var_list_plot[i_plot])
+  , xlab  = ""
+  , ylab  = ""
+  #, col   = dat_sub$dx_current
+  , pch   = 20  #3
+  , xlim  = c(1, nrow(dat_sub) * 1.2)
+  )
+  #text(
+  #  x     = 1:nrow(dat_sub)
+  #, y     = dat_sub[[ var_list_plot[i_plot] ]]
+  #, labels = 1:nrow(dat_sub)
+  #, pos   = 4 # 1 = below, 2 = left, 3 = above, 4 = right
+  #)
+}
+par(mfrow=c(1,1))
+```
+
+
+Drop extreme outlying values.
+```{r}
+# Drop extreme outlying values
+## #dat_sub$fl_albumin_index        [dat_sub$fl_albumin_index         > 20     ]  <- NA   # obs 14
+## #dat_sub$fl_ptau                 [dat_sub$fl_ptau                  > 200    ]  <- NA   # obs 140, 275
+## dat_sub$fl_msd_csf_mmp_1        [dat_sub$fl_msd_csf_mmp_1         > 80     ]  <- NA   # obs 113, 162
+## #dat_sub$fl_msd_csf_mmp_2        [dat_sub$fl_msd_csf_mmp_2         < 5000   ]  <- NA   # obs 260
+## dat_sub$fl_msd_csf_mmp_9        [dat_sub$fl_msd_csf_mmp_9         > 1000   ]  <- NA   # obs 162, 181
+## dat_sub$fl_msd_csf_mmp_10       [dat_sub$fl_msd_csf_mmp_10        > 250    ]  <- NA   # obs 110
+## dat_sub$fl_angio_csf_bfgf       [dat_sub$fl_angio_csf_bfgf        > 4      ]  <- NA   # obs 138, 152
+## dat_sub$fl_angio_csf_vegf_a     [dat_sub$fl_angio_csf_vegf_a      > 15     ]  <- NA   # obs 100
+## dat_sub$fl_cyto_csf_ifn_g       [dat_sub$fl_cyto_csf_ifn_g        > 1      ]  <- NA   # obs 7
+## dat_sub$fl_cyto_csf_il_10       [dat_sub$fl_cyto_csf_il_10        > 0.2    ]  <- NA   # obs 119, 162
+## dat_sub$fl_cyto_csf_il_13       [dat_sub$fl_cyto_csf_il_13        > 1.5    ]  <- NA   # obs 85, 92
+## dat_sub$fl_cyto_csf_il_1b       [dat_sub$fl_cyto_csf_il_1b        > 1      ]  <- NA   # obs 100
+## dat_sub$fl_cyto_csf_il_2        [dat_sub$fl_cyto_csf_il_2         > 0.3    ]  <- NA   # obs 163, 278
+## dat_sub$fl_cyto_csf_il_4        [dat_sub$fl_cyto_csf_il_4         > 0.015  ]  <- NA   # obs 268
+## dat_sub$fl_cyto_csf_il_6        [dat_sub$fl_cyto_csf_il_6         > 4      ]  <- NA   # obs 268
+## dat_sub$fl_msd_plasma_mmp_2     [dat_sub$fl_msd_plasma_mmp_2      > 250000 ]  <- NA   # obs 63, 66, 112
+## dat_sub$fl_msd_plasma_mmp_3     [dat_sub$fl_msd_plasma_mmp_3      > 100000 ]  <- NA   # obs 44
+## dat_sub$fl_msd_plasma_mmp_9     [dat_sub$fl_msd_plasma_mmp_9      > 500000 ]  <- NA   # obs 168, 171
+## dat_sub$fl_angio_plasma_bfgf    [dat_sub$fl_angio_plasma_bfgf     > 300    ]  <- NA   # obs 122
+## dat_sub$fl_angio_plasma_flt_1   [dat_sub$fl_angio_plasma_flt_1    > 140    ]  <- NA   # obs 83, 175
+## dat_sub$fl_angio_plasma_plgf    [dat_sub$fl_angio_plasma_plgf     > 50     ]  <- NA   # obs 238
+## dat_sub$fl_angio_plasma_vegf_a  [dat_sub$fl_angio_plasma_vegf_a   > 1000   ]  <- NA   # obs 12, 168, 171
+## dat_sub$fl_angio_plasma_vegf_c  [dat_sub$fl_angio_plasma_vegf_c   > 1000   ]  <- NA   # obs 142
+## dat_sub$fl_cyto_plasma_ifn_g    [dat_sub$fl_cyto_plasma_ifn_g     > 80     ]  <- NA   # obs 124
+## dat_sub$fl_cyto_plasma_il_10    [dat_sub$fl_cyto_plasma_il_10     > 2.5    ]  <- NA   # obs 33, 177
+## dat_sub$fl_cyto_plasma_il_8     [dat_sub$fl_cyto_plasma_il_8      > 40     ]  <- NA   # obs 17, 168, 171
+## dat_sub$fl_cyto_plasma_il_6     [dat_sub$fl_cyto_plasma_il_6      > 8      ]  <- NA   # obs 43, 44, 168, 171, 175
+## dat_sub$fl_cyto_plasma_il_4     [dat_sub$fl_cyto_plasma_il_4      > 0.25   ]  <- NA   # obs 171, 239 +1more
+## dat_sub$fl_cyto_plasma_il_2     [dat_sub$fl_cyto_plasma_il_2      > 1.5    ]  <- NA   # obs +1more
+## dat_sub$fl_cyto_plasma_il_1b    [dat_sub$fl_cyto_plasma_il_1b     > 1.5    ]  <- NA   # obs 5, 168, 171
+## dat_sub$fl_cyto_plasma_il_12p70 [dat_sub$fl_cyto_plasma_il_12p70  > 1.25   ]  <- NA   # obs 171
+##
+## # dat_sub$mri_vol_gm                [dat_sub$mri_vol_gm               <  0.22] <- NA   # 1
+## # dat_sub$mri_dti_fabnormal_z       [dat_sub$mri_dti_fabnormal_z      < -1.66] <- NA   # 1
+## # dat_sub$mri_dti_histpk_z          [dat_sub$mri_dti_histpk_z         < -6.35] <- NA   # 2
+## # dat_sub$mri_vol_hippocampal       [dat_sub$mri_vol_hippocampal      <  4000] <- NA   # 1
+## # dat_sub$fl_msd_csf_mmp_2          [dat_sub$fl_msd_csf_mmp_2         <  1000] <- NA   # 1
+## #dat_sub$mri_perm_combined_tot       [dat_sub$mri_perm_combined_tot    >    35] <- NA   # 1
+
+
+## # Drop extreme outlying values
+## dat_sub[[ "fl_csf_glucose"                     ]] [dat_sub[[ "fl_csf_glucose"                     ]] <      3       ]  <- NA   # obs
+## dat_sub[[ "fl_csf_total_protein"               ]] [dat_sub[[ "fl_csf_total_protein"               ]] >      7.5     ]  <- NA   # obs
+## dat_sub[[ "fl_csf_rbc"                         ]] [dat_sub[[ "fl_csf_rbc"                         ]] >      8       ]  <- NA   # obs
+## #dat_sub[[ "fl_csf_tnc"                         ]] [dat_sub[[ "fl_csf_tnc"                         ]] > 000000.0000  ]  <- NA   # obs
+## dat_sub[[ "fl_csf_igg"                         ]] [dat_sub[[ "fl_csf_igg"                         ]] <      0       ]  <- NA   # obs
+## #dat_sub[[ "fl_csf_albumin"                     ]] [dat_sub[[ "fl_csf_albumin"                     ]] > 000000.0000  ]  <- NA   # obs
+## #dat_sub[[ "fl_csf_igg_synthesis"               ]] [dat_sub[[ "fl_csf_igg_synthesis"               ]] > 000000.0000  ]  <- NA   # obs
+## dat_sub[[ "fl_igg_index"                       ]] [dat_sub[[ "fl_igg_index"                       ]] <     -2       ]  <- NA   # obs
+## #dat_sub[[ "fl_albumin_index"                   ]] [dat_sub[[ "fl_albumin_index"                   ]] > 000000.0000  ]  <- NA   # obs
+## #dat_sub[[ "fl_oligoclonal_bands"               ]] [dat_sub[[ "fl_oligoclonal_bands"               ]] > 000000.0000  ]  <- NA   # obs
+## #dat_sub[[ "fl_myelin_basic_protein"            ]] [dat_sub[[ "fl_myelin_basic_protein"            ]] > 000000.0000  ]  <- NA   # obs
+## #dat_sub[[ "fl_serum_igg"                       ]] [dat_sub[[ "fl_serum_igg"                       ]] > 000000.0000  ]  <- NA   # obs
+## dat_sub[[ "fl_serum_albumin"                   ]] [dat_sub[[ "fl_serum_albumin"                   ]] <     10       ]  <- NA   # obs
+## #dat_sub[[ "fl_zym_plasma_mmp_2_72_kda"         ]] [dat_sub[[ "fl_zym_plasma_mmp_2_72_kda"         ]] > 000000.0000  ]  <- NA   # obs
+## #dat_sub[[ "fl_zym_plasma_mmp_2_62_kda"         ]] [dat_sub[[ "fl_zym_plasma_mmp_2_62_kda"         ]] > 000000.0000  ]  <- NA   # obs
+## #dat_sub[[ "fl_zym_mmp_2_index"                 ]] [dat_sub[[ "fl_zym_mmp_2_index"                 ]] > 000000.0000  ]  <- NA   # obs
+## #dat_sub[[ "fl_zym_plasma_mmp_2_92_kda"         ]] [dat_sub[[ "fl_zym_plasma_mmp_2_92_kda"         ]] > 000000.0000  ]  <- NA   # obs
+## #dat_sub[[ "fl_zym_plasma_mmp_2_84_kda"         ]] [dat_sub[[ "fl_zym_plasma_mmp_2_84_kda"         ]] > 000000.0000  ]  <- NA   # obs
+## dat_sub[[ "fl_msd_plasma_mmp_1"                ]] [dat_sub[[ "fl_msd_plasma_mmp_1"                ]] <      8       ]  <- NA   # obs
+## #dat_sub[[ "fl_msd_plasma_mmp_2"                ]] [dat_sub[[ "fl_msd_plasma_mmp_2"                ]] > 000000.0000  ]  <- NA   # obs
+## dat_sub[[ "fl_msd_plasma_mmp_3"                ]] [dat_sub[[ "fl_msd_plasma_mmp_3"                ]] <      8       ]  <- NA   # obs
+## dat_sub[[ "fl_msd_plasma_mmp_9"                ]] [dat_sub[[ "fl_msd_plasma_mmp_9"                ]] <     12       ]  <- NA   # obs
+## #dat_sub[[ "fl_msd_plasma_mmp_10"               ]] [dat_sub[[ "fl_msd_plasma_mmp_10"               ]] > 000000.0000  ]  <- NA   # obs
+## #dat_sub[[ "fl_msd_csf_mmp_1"                   ]] [dat_sub[[ "fl_msd_csf_mmp_1"                   ]] > 000000.0000  ]  <- NA   # obs
+## dat_sub[[ "fl_msd_csf_mmp_2"                   ]] [dat_sub[[ "fl_msd_csf_mmp_2"                   ]] <     12       ]  <- NA   # obs
+## #dat_sub[[ "fl_msd_csf_mmp_3"                   ]] [dat_sub[[ "fl_msd_csf_mmp_3"                   ]] > 000000.0000  ]  <- NA   # obs
+## #dat_sub[[ "fl_msd_csf_mmp_9"                   ]] [dat_sub[[ "fl_msd_csf_mmp_9"                   ]] > 000000.0000  ]  <- NA   # obs
+## dat_sub[[ "fl_msd_csf_mmp_10"                  ]] [dat_sub[[ "fl_msd_csf_mmp_10"                  ]] <      4       ]  <- NA   # obs
+## #dat_sub[[ "fl_msd_mmp_2_index"                 ]] [dat_sub[[ "fl_msd_mmp_2_index"                 ]] > 000000.0000  ]  <- NA   # obs
+## dat_sub[[ "fl_angio_plasma_bfgf"               ]] [dat_sub[[ "fl_angio_plasma_bfgf"               ]] >      8       ]  <- NA   # obs
+## #dat_sub[[ "fl_angio_plasma_flt_1"              ]] [dat_sub[[ "fl_angio_plasma_flt_1"              ]] > 000000.0000  ]  <- NA   # obs
+## dat_sub[[ "fl_angio_plasma_tie2"               ]] [dat_sub[[ "fl_angio_plasma_tie2"               ]] <      6       ]  <- NA   # obs
+## #dat_sub[[ "fl_angio_plasma_vegf_a"             ]] [dat_sub[[ "fl_angio_plasma_vegf_a"             ]] > 000000.0000  ]  <- NA   # obs
+## dat_sub[[ "fl_angio_plasma_vegf_c"             ]] [dat_sub[[ "fl_angio_plasma_vegf_c"             ]] >      8       ]  <- NA   # obs
+## dat_sub[[ "fl_angio_plasma_vegf_d"             ]] [dat_sub[[ "fl_angio_plasma_vegf_d"             ]] <      6       ]  <- NA   # obs
+## #dat_sub[[ "fl_angio_csf_bfgf"                  ]] [dat_sub[[ "fl_angio_csf_bfgf"                  ]] > 000000.0000  ]  <- NA   # obs
+## dat_sub[[ "fl_angio_csf_flt_1"                 ]] [dat_sub[[ "fl_angio_csf_flt_1"                 ]] <      2       ]  <- NA   # obs
+## #dat_sub[[ "fl_angio_csf_tie2"                  ]] [dat_sub[[ "fl_angio_csf_tie2"                  ]] > 000000.0000  ]  <- NA   # obs
+## #dat_sub[[ "fl_angio_csf_vegf_a"                ]] [dat_sub[[ "fl_angio_csf_vegf_a"                ]] > 000000.0000  ]  <- NA   # obs
+## #dat_sub[[ "fl_angio_csf_vegf_c"                ]] [dat_sub[[ "fl_angio_csf_vegf_c"                ]] > 000000.0000  ]  <- NA   # obs
+## dat_sub[[ "fl_angio_csf_vegf_d"                ]] [dat_sub[[ "fl_angio_csf_vegf_d"                ]] <      2       ]  <- NA   # obs
+## #dat_sub[[ "fl_abeta_38"                        ]] [dat_sub[[ "fl_abeta_38"                        ]] > 000000.0000  ]  <- NA   # obs
+## #dat_sub[[ "fl_abeta_4240_ratio"                ]] [dat_sub[[ "fl_abeta_4240_ratio"                ]] > 000000.0000  ]  <- NA   # obs
+## #dat_sub[[ "fl_cyto_csf_ifn_g"                  ]] [dat_sub[[ "fl_cyto_csf_ifn_g"                  ]] > 000000.0000  ]  <- NA   # obs
+## #dat_sub[[ "fl_cyto_csf_il_10"                  ]] [dat_sub[[ "fl_cyto_csf_il_10"                  ]] > 000000.0000  ]  <- NA   # obs
+## #dat_sub[[ "fl_cyto_csf_il_12p70"               ]] [dat_sub[[ "fl_cyto_csf_il_12p70"               ]] > 000000.0000  ]  <- NA   # obs
+## #dat_sub[[ "fl_cyto_csf_il_13"                  ]] [dat_sub[[ "fl_cyto_csf_il_13"                  ]] > 000000.0000  ]  <- NA   # obs
+## dat_sub[[ "fl_cyto_csf_il_1b"                  ]] [dat_sub[[ "fl_cyto_csf_il_1b"                  ]] >      0       ]  <- NA   # obs
+## dat_sub[[ "fl_cyto_csf_il_2"                   ]] [dat_sub[[ "fl_cyto_csf_il_2"                   ]] <     -8       ]  <- NA   # obs
+## #dat_sub[[ "fl_cyto_csf_il_4"                   ]] [dat_sub[[ "fl_cyto_csf_il_4"                   ]] > 000000.0000  ]  <- NA   # obs
+## dat_sub[[ "fl_cyto_csf_il_6"                   ]] [dat_sub[[ "fl_cyto_csf_il_6"                   ]] >      2       ]  <- NA   # obs
+## #dat_sub[[ "fl_cyto_csf_il_8"                   ]] [dat_sub[[ "fl_cyto_csf_il_8"                   ]] > 000000.0000  ]  <- NA   # obs
+## dat_sub[[ "fl_cyto_csf_tnf_a"                  ]] [dat_sub[[ "fl_cyto_csf_tnf_a"                  ]] <     -5       ]  <- NA   # obs
+## #dat_sub[[ "fl_cyto_plasma_ifn_g"               ]] [dat_sub[[ "fl_cyto_plasma_ifn_g"               ]] > 000000.0000  ]  <- NA   # obs
+## #dat_sub[[ "fl_cyto_plasma_il_10"               ]] [dat_sub[[ "fl_cyto_plasma_il_10"               ]] > 000000.0000  ]  <- NA   # obs
+## #dat_sub[[ "fl_cyto_plasma_il_12p70"            ]] [dat_sub[[ "fl_cyto_plasma_il_12p70"            ]] > 000000.0000  ]  <- NA   # obs
+## #dat_sub[[ "fl_cyto_plasma_il_13"               ]] [dat_sub[[ "fl_cyto_plasma_il_13"               ]] > 000000.0000  ]  <- NA   # obs
+## #dat_sub[[ "fl_cyto_plasma_il_2"                ]] [dat_sub[[ "fl_cyto_plasma_il_2"                ]] > 000000.0000  ]  <- NA   # obs
+## #dat_sub[[ "fl_cyto_plasma_il_4"                ]] [dat_sub[[ "fl_cyto_plasma_il_4"                ]] > 000000.0000  ]  <- NA   # obs
+## #dat_sub[[ "fl_cyto_plasma_il_6"                ]] [dat_sub[[ "fl_cyto_plasma_il_6"                ]] > 000000.0000  ]  <- NA   # obs
+## dat_sub[[ "fl_cyto_plasma_il_8"                ]] [dat_sub[[ "fl_cyto_plasma_il_8"                ]] >      5       ]  <- NA   # obs
+## dat_sub[[ "fl_cyto_plasma_tnf_a"               ]] [dat_sub[[ "fl_cyto_plasma_tnf_a"               ]] <     -1       ]  <- NA   # obs
+## dat_sub[[ "fl_simoa_csf_il_1b"                 ]] [dat_sub[[ "fl_simoa_csf_il_1b"                 ]] >     -4.5     ]  <- NA   # obs
+## #dat_sub[[ "fl_simoa_edta_plasma_ptau_v2_1"     ]] [dat_sub[[ "fl_simoa_edta_plasma_ptau_v2_1"     ]] > 000000.0000  ]  <- NA   # obs
+## #dat_sub[[ "fl_simoa_csf_ptau_v2_1"             ]] [dat_sub[[ "fl_simoa_csf_ptau_v2_1"             ]] > 000000.0000  ]  <- NA   # obs
+## #dat_sub[[ "fl_apoe_ncrad"                      ]] [dat_sub[[ "fl_apoe_ncrad"                      ]] > 000000.0000  ]  <- NA   # obs
+## #dat_sub[[ "fl_csf__ALL__gfap"                  ]] [dat_sub[[ "fl_csf__ALL__gfap"                  ]] > 000000.0000  ]  <- NA   # obs
+## #dat_sub[[ "fl_plasma__ALL__gfap"               ]] [dat_sub[[ "fl_plasma__ALL__gfap"               ]] > 000000.0000  ]  <- NA   # obs
+## #dat_sub[[ "fl_csf__ALL__nfl"                   ]] [dat_sub[[ "fl_csf__ALL__nfl"                   ]] > 000000.0000  ]  <- NA   # obs
+## #dat_sub[[ "fl_plasma__ALL__nfl"                ]] [dat_sub[[ "fl_plasma__ALL__nfl"                ]] > 000000.0000  ]  <- NA   # obs
+## #dat_sub[[ "fl_csf__ALL__ptau"                  ]] [dat_sub[[ "fl_csf__ALL__ptau"                  ]] > 000000.0000  ]  <- NA   # obs
+## #dat_sub[[ "fl_plasma__ALL__ptau"               ]] [dat_sub[[ "fl_plasma__ALL__ptau"               ]] > 000000.0000  ]  <- NA   # obs
+## #dat_sub[[ "fl_csf__ALL__abeta_40"              ]] [dat_sub[[ "fl_csf__ALL__abeta_40"              ]] > 000000.0000  ]  <- NA   # obs
+## #dat_sub[[ "fl_plasma__ALL__abeta_40"           ]] [dat_sub[[ "fl_plasma__ALL__abeta_40"           ]] > 000000.0000  ]  <- NA   # obs
+## #dat_sub[[ "fl_csf__ALL__abeta_42"              ]] [dat_sub[[ "fl_csf__ALL__abeta_42"              ]] > 000000.0000  ]  <- NA   # obs
+## #dat_sub[[ "fl_plasma__ALL__abeta_42"           ]] [dat_sub[[ "fl_plasma__ALL__abeta_42"           ]] > 000000.0000  ]  <- NA   # obs
+## dat_sub[[ "fl_csf__ALL__plgf"                  ]] [dat_sub[[ "fl_csf__ALL__plgf"                  ]] <      0       ]  <- NA   # obs
+## #dat_sub[[ "fl_plasma__ALL__plgf"               ]] [dat_sub[[ "fl_plasma__ALL__plgf"               ]] > 000000.0000  ]  <- NA   # obs
+## #dat_sub[[ "fl_plasma__ALL__il_1b"              ]] [dat_sub[[ "fl_plasma__ALL__il_1b"              ]] > 000000.0000  ]  <- NA   # obs
+## #dat_sub[[ "fl_csf__ALL__mmp_2"                 ]] [dat_sub[[ "fl_csf__ALL__mmp_2"                 ]] > 000000.0000  ]  <- NA   # obs
+## #dat_sub[[ "fl_csf__ALL__mmp_2_index"           ]] [dat_sub[[ "fl_csf__ALL__mmp_2_index"           ]] > 000000.0000  ]  <- NA   # obs
+
+# 1/10/2025
+### CSF
+#dat_sub[[ "fl_albumin_index_log2"                 ]] [ dat_sub[[ "fl_albumin_index_log2"                 ]] > 0 ] <- NA
+#dat_sub[[ "fl_igg_index_log2"                     ]] [ dat_sub[[ "fl_igg_index_log2"                     ]] > 0 ] <- NA
+#dat_sub[[ "fl_csf_igg_log2"                       ]] [ dat_sub[[ "fl_csf_igg_log2"                       ]] < 0.2 ] <- NA
+#dat_sub[[ "fl_msd_csf_mmp_1_log2"                 ]] [ dat_sub[[ "fl_msd_csf_mmp_1_log2"                 ]] > 0 ] <- NA
+#dat_sub[[ "fl_msd_csf_mmp_2_log2"                 ]] [ dat_sub[[ "fl_msd_csf_mmp_2_log2"                 ]] > 0 ] <- NA
+#dat_sub[[ "fl_msd_csf_mmp_3_log2"                 ]] [ dat_sub[[ "fl_msd_csf_mmp_3_log2"                 ]] > 0 ] <- NA
+dat_sub[[ "fl_msd_csf_mmp_9_log2"                 ]] [ dat_sub[[ "fl_msd_csf_mmp_9_log2"                 ]] < 1 ] <- NA
+#dat_sub[[ "fl_csf__ALL__mmp_10_log2"              ]] [ dat_sub[[ "fl_csf__ALL__mmp_10_log2"              ]] > 0 ] <- NA
+#dat_sub[[ "fl_angio_csf_bfgf_log2"                ]] [ dat_sub[[ "fl_angio_csf_bfgf_log2"                ]] > 3 ] <- NA
+dat_sub[[ "fl_angio_csf_flt_1_log2"               ]] [ dat_sub[[ "fl_angio_csf_flt_1_log2"               ]] < 1 ] <- NA
+#dat_sub[[ "fl_angio_csf_tie2_log2"                ]] [ dat_sub[[ "fl_angio_csf_tie2_log2"                ]] > 0 ] <- NA
+dat_sub[[ "fl_angio_csf_vegf_a_log2"              ]] [ dat_sub[[ "fl_angio_csf_vegf_a_log2"              ]] < 0.1 ] <- NA
+dat_sub[[ "fl_angio_csf_vegf_c_log2"              ]] [ dat_sub[[ "fl_angio_csf_vegf_c_log2"              ]] < 0.1 ] <- NA
+dat_sub[[ "fl_angio_csf_vegf_d_log2"              ]] [ dat_sub[[ "fl_angio_csf_vegf_d_log2"              ]] < 1.5 ] <- NA
+#dat_sub[[ "fl_cyto_csf_ifn_g_log2"                ]] [ dat_sub[[ "fl_cyto_csf_ifn_g_log2"                ]] > 2.5 ] <- NA
+dat_sub[[ "fl_csf__ALL__il_1b_log2"               ]] [ dat_sub[[ "fl_csf__ALL__il_1b_log2"               ]] > 1.2 ] <- NA
+#dat_sub[[ "fl_cyto_csf_il_2_log2"                 ]] [ dat_sub[[ "fl_cyto_csf_il_2_log2"                 ]] > 0.65 ] <- NA
+#dat_sub[[ "fl_cyto_csf_il_4_log2"                 ]] [ dat_sub[[ "fl_cyto_csf_il_4_log2"                 ]] > 0.025 ] <- NA
+#dat_sub[[ "fl_cyto_csf_il_6_log2"                 ]] [ dat_sub[[ "fl_cyto_csf_il_6_log2"                 ]] > 3 ] <- NA
+#dat_sub[[ "fl_cyto_csf_il_8_log2"                 ]] [ dat_sub[[ "fl_cyto_csf_il_8_log2"                 ]] > 9 ] <- NA
+#dat_sub[[ "fl_cyto_csf_il_10_log2"                ]] [ dat_sub[[ "fl_cyto_csf_il_10_log2"                ]] > 0.55 ] <- NA
+#dat_sub[[ "fl_cyto_csf_il_12p70_log2"             ]] [ dat_sub[[ "fl_cyto_csf_il_12p70_log2"             ]] > 0 ] <- NA
+#dat_sub[[ "fl_cyto_csf_il_13_log2"                ]] [ dat_sub[[ "fl_cyto_csf_il_13_log2"                ]] > 0 ] <- NA
+#dat_sub[[ "fl_cyto_csf_tnf_a_log2"                ]] [ dat_sub[[ "fl_cyto_csf_tnf_a_log2"                ]] > 0.9 ] <- NA
+#dat_sub[[ "fl_csf__ALL__nfl_log2"                 ]] [ dat_sub[[ "fl_csf__ALL__nfl_log2"                 ]] > 0 ] <- NA
+dat_sub[[ "fl_csf__ALL__plgf_log2"                ]] [ dat_sub[[ "fl_csf__ALL__plgf_log2"                ]] < 0.5 ] <- NA
+#dat_sub[[ "fl_csf__ALL__gfap_log2"                ]] [ dat_sub[[ "fl_csf__ALL__gfap_log2"                ]] > 0 ] <- NA
+#dat_sub[[ "fl_abeta_4240_ratio_log2"              ]] [ dat_sub[[ "fl_abeta_4240_ratio_log2"              ]] > 0 ] <- NA
+#dat_sub[[ "fl_csf__ALL__ptau_log2"                ]] [ dat_sub[[ "fl_csf__ALL__ptau_log2"                ]] > 0 ] <- NA
+#dat_sub[[ "fl_myelin_basic_protein_log2"          ]] [ dat_sub[[ "fl_myelin_basic_protein_log2"          ]] > 0 ] <- NA
+### Plasma
+#dat_sub[[ "fl_serum_igg_log2"                     ]] [ dat_sub[[ "fl_serum_igg_log2"                     ]] < 8.25 ] <- NA
+#dat_sub[[ "fl_plasma__ALL__mmp_1_log2"            ]] [ dat_sub[[ "fl_plasma__ALL__mmp_1_log2"            ]] > 15.5 ] <- NA
+#dat_sub[[ "fl_plasma__ALL__mmp_2_log2"            ]] [ dat_sub[[ "fl_plasma__ALL__mmp_2_log2"            ]] > 21 ] <- NA
+#dat_sub[[ "fl_plasma__ALL__mmp_3_log2"            ]] [ dat_sub[[ "fl_plasma__ALL__mmp_3_log2"            ]] > 0 ] <- NA
+#dat_sub[[ "fl_plasma__ALL__mmp_9_log2"            ]] [ dat_sub[[ "fl_plasma__ALL__mmp_9_log2"            ]] > 20.5 ] <- NA
+#dat_sub[[ "fl_plasma__ALL__mmp_10_log2"           ]] [ dat_sub[[ "fl_plasma__ALL__mmp_10_log2"           ]] > 0 ] <- NA
+#dat_sub[[ "fl_plasma__ALL__bfgf_log2"             ]] [ dat_sub[[ "fl_plasma__ALL__bfgf_log2"             ]] > 10.5 ] <- NA
+#dat_sub[[ "fl_plasma__ALL__flt_1_log2"            ]] [ dat_sub[[ "fl_plasma__ALL__flt_1_log2"            ]] > 0 ] <- NA
+#dat_sub[[ "fl_plasma__ALL__tie2_log2"             ]] [ dat_sub[[ "fl_plasma__ALL__tie2_log2"             ]] > 0 ] <- NA
+#dat_sub[[ "fl_plasma__ALL__vegf_a_log2"           ]] [ dat_sub[[ "fl_plasma__ALL__vegf_a_log2"           ]] > 0 ] <- NA
+#dat_sub[[ "fl_plasma__ALL__vegf_c_log2"           ]] [ dat_sub[[ "fl_plasma__ALL__vegf_c_log2"           ]] > 0 ] <- NA
+#dat_sub[[ "fl_plasma__ALL__vegf_d_log2"           ]] [ dat_sub[[ "fl_plasma__ALL__vegf_d_log2"           ]] < 5 ] <- NA
+#dat_sub[[ "fl_cyto_heparin_plasma_ifn_g_log2"     ]] [ dat_sub[[ "fl_cyto_heparin_plasma_ifn_g_log2"     ]] > 0 ] <- NA
+#dat_sub[[ "fl_plasma__ALL__il_1b_log2"            ]] [ dat_sub[[ "fl_plasma__ALL__il_1b_log2"            ]] > 1.25 ] <- NA
+#dat_sub[[ "fl_cyto_heparin_plasma_il_2_log2"      ]] [ dat_sub[[ "fl_cyto_heparin_plasma_il_2_log2"      ]] > 0 ] <- NA
+dat_sub[[ "fl_cyto_heparin_plasma_il_4_log2"      ]] [ dat_sub[[ "fl_cyto_heparin_plasma_il_4_log2"      ]] > 1 ] <- NA
+#dat_sub[[ "fl_cyto_heparin_plasma_il_6_log2"      ]] [ dat_sub[[ "fl_cyto_heparin_plasma_il_6_log2"      ]] > 0 ] <- NA
+#dat_sub[[ "fl_cyto_heparin_plasma_il_8_log2"      ]] [ dat_sub[[ "fl_cyto_heparin_plasma_il_8_log2"      ]] > 0 ] <- NA
+#dat_sub[[ "fl_cyto_heparin_plasma_il_10_log2"     ]] [ dat_sub[[ "fl_cyto_heparin_plasma_il_10_log2"     ]] > 0 ] <- NA
+#dat_sub[[ "fl_cyto_heparin_plasma_il_12p70_log2"  ]] [ dat_sub[[ "fl_cyto_heparin_plasma_il_12p70_log2"  ]] > 0 ] <- NA
+#dat_sub[[ "fl_cyto_heparin_plasma_il_13_log2"     ]] [ dat_sub[[ "fl_cyto_heparin_plasma_il_13_log2"     ]] > 0 ] <- NA
+#dat_sub[[ "fl_cyto_heparin_plasma_tnf_a_log2"     ]] [ dat_sub[[ "fl_cyto_heparin_plasma_tnf_a_log2"     ]] > 0 ] <- NA
+#dat_sub[[ "fl_plasma__ALL__nfl_log2"              ]] [ dat_sub[[ "fl_plasma__ALL__nfl_log2"              ]] > 0 ] <- NA
+#dat_sub[[ "fl_plasma__ALL__plgf_log2"             ]] [ dat_sub[[ "fl_plasma__ALL__plgf_log2"             ]] > 0 ] <- NA
+#dat_sub[[ "fl_plasma__ALL__gfap_log2"             ]] [ dat_sub[[ "fl_plasma__ALL__gfap_log2"             ]] > 0 ] <- NA
+#dat_sub[[ "fl_plasma__ALL__abeta_40_log2"         ]] [ dat_sub[[ "fl_plasma__ALL__abeta_40_log2"         ]] > 0 ] <- NA
+#dat_sub[[ "fl_plasma__ALL__abeta_42_log2"         ]] [ dat_sub[[ "fl_plasma__ALL__abeta_42_log2"         ]] > 0 ] <- NA
+#dat_sub[[ "fl_plasma__ALL__ptau_181_log2"         ]] [ dat_sub[[ "fl_plasma__ALL__ptau_181_log2"         ]] > 0 ] <- NA
+#dat_sub[[ "fl_plasma__ALL__ptau_217_log2"         ]] [ dat_sub[[ "fl_plasma__ALL__ptau_217_log2"         ]] > 0 ] <- NA
+### MRI
+#dat_sub[[ "mri_percent_vol_hippo"                 ]] [ dat_sub[[ "mri_percent_vol_hippo"                 ]] > 0 ] <- NA
+#dat_sub[[ "mri_ucd_wmhv_percent"                  ]] [ dat_sub[[ "mri_ucd_wmhv_percent"                  ]] > 25 ] <- NA
+#dat_sub[[ "mri_mean_cort_thick_mm"                ]] [ dat_sub[[ "mri_mean_cort_thick_mm"                ]] > 0 ] <- NA
+#dat_sub[[ "mri_perm_3t_tot"                       ]] [ dat_sub[[ "mri_perm_3t_tot"                       ]] > 0 ] <- NA
+#dat_sub[[ "mri_dti_psmd"                          ]] [ dat_sub[[ "mri_dti_psmd"                          ]] > 0.00175 ] <- NA
+#dat_sub[[ "mri_dti_freewater_mean"                ]] [ dat_sub[[ "mri_dti_freewater_mean"                ]] > 0 ] <- NA
+
+```
+
+
+Plot again
+
+
+```{r chunk-014, fig.height = 4, fig.width = 10}
+
+par(mfrow=c(1,3))
+for (i_plot in 1:length(var_list_plot)) {
+  ## i_plot = 1
+  #if (i_plot > 3) {next}
+
+  if( all(is.na(dat_sub[[ var_list_plot[i_plot] ]])) ) {
+    next
+  }
+
+  plot(
+    x     = 1:nrow(dat_sub)
+  , y     = dat_sub[[ var_list_plot[i_plot] ]]
+  , type  = "p"
+  , main  = paste0("After: ", var_list_plot[i_plot])
+  , xlab  = ""
+  , ylab  = ""
+  #, col   = dat_sub$dx_current
+  , pch   = 20  #3
+  , xlim  = c(1, nrow(dat_sub) * 1.2)
+  )
+  #text(
+  #  x     = 1:nrow(dat_sub)
+  #, y     = dat_sub[[ var_list_plot[i_plot] ]]
+  #, labels = 1:nrow(dat_sub)
+  #, pos   = 4 # 1 = below, 2 = left, 3 = above, 4 = right
+  #)
+}
+par(mfrow=c(1,1))
+```
+
+
+
+
+
+# Just the plots that Gary wants for presentation
+
+```{r}
+
+## for (n_group in sort(unique(dat_var_label_matching$Type)) ) {
+##   ## n_group = sort(unique(dat_var_label_matching$Type))[1]
+##
+##   print(paste0("=== n_group: ", n_group))
+##
+##   # skip some groups
+##   if (n_group %in% c("ID", "Demographics")) {
+##     next
+##   }
+##
+##   var_temp <-
+##     dat_var_label_matching |>
+##     dplyr::filter(Type == n_group) |>
+##     dplyr::pull(Var)
+##   # label_temp <-
+##   #   dat_var_label_matching |>
+##   #   dplyr::filter(Type == n_group) |>
+##   #   dplyr::pull(Label)
+
+#dir.create("out_new/plot_indy_alb")
+dir.create("All_figures_for_paper/combined")
+var_temp <-
+  c(
+    Var$demo
+  , Var$csf
+  , Var$plasma
+  , Var$mri
+  )
+
+p_list_indy <- list()
+for (i_plot in seq_along(var_temp)) {
+  ## i_plot = 1
+
+  print(paste0("=== i_plot: ", i_plot, " / ", length(var_temp), ", ", var_temp[i_plot]))
+
+
+  p_list_indy[[ i_plot ]] <-
+    e_plot_scatterplot(
+      dat_plot                  = dat_sub
+    , var_x                     = var_temp[i_plot]
+    , var_y                     = "fl_albumin_index_log2"
+    #, var_color                 = "dx_current"
+    , text_title                = labelled::var_label(dat_sub[[ var_temp[i_plot] ]] )
+    , smooth_all                = c("none", "loess", "lm", "glm", "gam")[3]
+    , sw_smooth_all_se          = c(TRUE, FALSE)[1]
+    , smooth_by_var_color       = c("none", "loess", "lm", "glm", "gam")[1]
+    , sw_smooth_by_var_color_se = c(TRUE, FALSE)[2]
+    , sw_corr_in_subtitle       = c(TRUE, FALSE)[1]
+    )
+  # p_list_indy[[ i_plot ]] <-
+  #   p_list_indy[[ i_plot ]] +
+  #   #theme(legend.position = "bottom") +
+  #   labs(
+  #     y = "CSF Albumin Index, log2"  #paste0("log2( ", "Albumin index", " )")
+  #   , x = label_temp[i_plot]  #paste0("log2( ", label_temp[i_plot], " )")
+  #   )
+
+
+  # individual plots
+  ggsave(
+      #paste0("out/plot_scatterplot_albumin_", n_group, ".png")
+      paste0("out_new/plot_indy_alb/plot_scatterplot_albumin_", var_temp[i_plot], ".png")
+    , plot   = p_list_indy[[ i_plot ]]
+    , width  = 6
+    , height = 6
+    ## png, jpeg
+    , dpi    = 300
+    , bg     = "white"
+    ## pdf
+    #, units  = "in"
+    #, useDingbats = FALSE  # https://stackoverflow.com/questions/9992275/ggplot2-pdf-import-in-adobe-illustrator-missing-font-adobepistd
+    )
+
+} # i_plot
+
+##   # p_arranged <-
+##   #   cowplot::plot_grid(
+##   #     plotlist = p_list
+##   #   , nrow = 1
+##   #   , ncol = NULL
+##   #   , labels="AUTO"
+##   #   )
+##   #
+##   # p_arranged |> print()
+##
+##   p_arranged <-
+##     patchwork::wrap_plots(
+##       p_list
+##     , nrow = 3
+##     , ncol = 4
+##     , tag_level = "new"
+##     , guides = "collect"
+##     ) +
+##     #patchwork::guide_area() +
+##     patchwork::plot_annotation(
+##     #  title = n_group
+##       title = NULL
+##     , subtitle = NULL
+##     , caption =
+##         paste0(
+##         #  "Black line is the overall least squares regression line.  Colored lines are by diagnosis group.  Dashed ellipse is a 95% confidence ellipse using the t-distribution."
+##           "Black line is the overall least squares regression line.  Dashed ellipse is a 95% confidence ellipse using the t-distribution."
+##         )
+##     , tag_levels = NULL
+##     , tag_prefix = NULL
+##     , tag_suffix = NULL
+##     , tag_sep = NULL
+##     , theme = NULL
+##     )
+##     #+
+##     #theme(plot.caption = element_text(hjust = 0)) # Default is hjust=1, Caption align left
+##   #p_arranged |> print()
+##
+##   ggsave(
+##       #paste0("out/plot_scatterplot_albumin_", n_group, ".png")
+##       paste0("out/plot_scatterplot_albumin_", ".png")
+##     , plot   = p_arranged
+##     , width  = 12
+##     , height = 12
+##     ## png, jpeg
+##     , dpi    = 300
+##     , bg     = "white"
+##     ## pdf
+##     #, units  = "in"
+##     #, useDingbats = FALSE  # https://stackoverflow.com/questions/9992275/ggplot2-pdf-import-in-adobe-illustrator-missing-font-adobepistd
+##     )
+##
+## } # n_group
+
+```
+
+
+
+## Original code for Laura's paper starts here
+
+```{r chunk-01}
+#library(erikmisc)
+#library(tidyverse)
+#library(corrplot)
+#library(broom)
+#library(dunn.test)
+#library(ggpubr)
+## devtools::install_github("vincentarelbundock/modelsummary")
+#library(modelsummary)
+#
+#dir.create("out_new")
+#
+#dat_sheet <- read.csv("PermeabilityAnalysis.Final.csv")
+#
+#dat_var_label_matching <-
+#  tibble::tribble(
+#    ~Var                      , ~Label                          , ~Type   # plot facet type labels
+#  , "demo_study_id"           , "Study ID"                      , "ID"
+#  , "dx_current"              , "Current Dx"                    , "Demographics"
+#  , "demo_sex"                , "Gender"                        , "Demographics"
+#  , "demo_yrs_edu"            , "Years of Education"            , "Demographics"
+#  , "demo_bl_age"             , "Age"                           , "Demographics"
+#  #, "fl_abeta_4240_ratio"     , "ABeta Ratio (42/40)"           , "AD" #"Alzheimers Biomarkers"
+#  #, "fl_albumin_index"        , "Albumin Index"                 , "Permeability"
+#  #, "fl_angio_csf_bfgf"       , "bFgF"                          , "Angiogenic Factors"
+#  #, "fl_angio_csf_flt_1"      , "Flt-1"                         , "Angiogenic Factors"
+#  #, "fl_cyto_csf_ifn_g"       , "IFN-g"                         , "Cytokines"
+#  #, "fl_cyto_csf_il_1b"       , "IL-1b"                         , "Cytokines"
+#  #, "fl_cyto_csf_il_2"        , "IL-2"                          , "Cytokines"
+#  #, "fl_cyto_csf_il_4"        , "IL-4"                          , "Cytokines"
+#  #, "fl_cyto_csf_il_6"        , "IL-6"                          , "Cytokines"
+#  #, "fl_cyto_csf_il_8"        , "IL-8"                          , "Cytokines"
+#  #, "fl_igg_index"            , "IgG Index"                     , "Other"
+#  #, "fl_msd_csf_mmp_1"        , "MMP-1"                         , "MMP" #"Metalloproteinases"
+#  #, "fl_msd_csf_mmp_2"        , "MMP-2"                         , "MMP" #"Metalloproteinases"
+#  #, "fl_msd_csf_mmp_3"        , "MMP-3"                         , "MMP" #"Metalloproteinases"
+#  #, "fl_msd_csf_mmp_9"        , "MMP-9"                         , "MMP" #"Metalloproteinases"
+#  #, "fl_msd_csf_mmp_10"       , "MMP-10"                        , "MMP" #"Metalloproteinases"
+#  #, "fl_myelin_basic_protein" , "Myelin Basic Protein"          , "Other"
+#  #, "fl_angio_csf_plgf"       , "PlGF"                          , "Angiogenic Factors"
+#  #, "fl_ptau"                 , "pTau"                          , "AD" #"Alzheimers Biomarkers"
+#  #, "fl_cyto_csf_tnf_a"       , "TNF-a"                         , "Cytokines"
+#  #, "fl_angio_csf_tie2"       , "Tie-2"                         , "Angiogenic Factors"
+#  #, "fl_angio_csf_vegf_a"     , "VEGF-A"                        , "Angiogenic Factors"
+#  #, "fl_angio_csf_vegf_c"     , "VEGF-C"                        , "Angiogenic Factors"
+#  #, "fl_angio_csf_vegf_d"     , "VEGF-D"                        , "Angiogenic Factors"
+#  , "mri_mean_cort_thick_mm"  , "Mean Cortical Thickness"       , "MRI"
+#  , "mri_dti_freewater_mean"  , "Mean Free Water"               , "MRI"
+#  , "percent_hippo"           , "Percent Hippocampal Volume"    , "MRI"
+#  , "mri_dti_psmd"            , "PSMD"                          , "MRI"
+#  , "mri_perm_3t_tot"         , "MRI WM Permeability"           , "Permeability"
+#  , "percent_wmhv"            , "WMHV"                          , "MRI"
+#  )
+#
+#
+##separate columns by intended transformation
+#totransform.log2 <-
+#  c(
+#    "fl_albumin_index"
+#  , "mri_dti_freewater_mean"
+#  , "mri_dti_psmd"
+#  , "fl_myelin_basic_protein"
+#  , "fl_igg_index"
+#  , "fl_angio_csf_bfgf"
+#  , "fl_angio_csf_flt_1"
+#  , "fl_angio_csf_plgf"
+#  , "fl_angio_csf_tie2"
+#  , "fl_angio_csf_vegf_a"
+#  , "fl_angio_csf_vegf_c"
+#  , "fl_angio_csf_vegf_d"
+#  , "fl_cyto_csf_il_1b"
+#  , "fl_cyto_csf_il_2"
+#  , "fl_cyto_csf_il_4"
+#  , "fl_cyto_csf_il_6"
+#  , "fl_cyto_csf_il_8"
+#  , "fl_cyto_csf_ifn_g"
+#  , "fl_cyto_csf_tnf_a"
+#  , "fl_msd_csf_mmp_1"
+#  , "fl_msd_csf_mmp_2"
+#  , "fl_msd_csf_mmp_3"
+#  , "fl_msd_csf_mmp_9"
+#  , "fl_msd_csf_mmp_10"
+#  , "fl_ptau"
+#  , "mri_perm_3t_tot"
+#  , "percent_wmhv"
+#  )
+#tokeep <-
+#  c(
+#    "demo_study_id"
+#  , "demo_bl_age"
+#  , "demo_sex"
+#  , "demo_yrs_edu"
+#  , "dx_current"
+#  , "percent_hippo"
+#  , "mri_mean_cort_thick_mm"
+#  , "fl_abeta_4240_ratio"
+#  )
+#
+#dx.tokeep <-
+#  c("LA", "MX", "SIVD", "AD")
+#
+## format data
+#dat_sheet <-
+#  dat_sheet %>%
+#  dplyr::select(
+#    all_of(tokeep)
+#  , all_of(totransform.log2)
+#  ) %>%
+#  dplyr::filter(
+#    dx_current %in% dx.tokeep
+#  ) %>%
+#  dplyr::mutate(
+#    dx_current    = dx_current
+#  , demo_sex      = ifelse(demo_sex == "", NA, demo_sex) %>% factor()
+#  , dx_current    = dx_current %>% factor()
+#  , demo_study_id = demo_study_id %>% factor()
+#  )
+```
+
+
+
+## Plots for outliers
+
+```{r, fig.height = 4, fig.width = 10}
+## var_list_plot <-
+##   c(totransform.log2, tokeep)
+##
+## par(mfrow=c(1,3))
+## for (i_plot in seq_along(var_list_plot)) {
+##   ## i_plot = 1
+##   #if (i_plot > 3) {next}
+##
+##   plot(
+##     x     = 1:nrow(dat_sheet)
+##   , y     = dat_sheet[[ var_list_plot[i_plot] ]]
+##   , type  = "p"
+##   , main  = paste0("Before: ", var_list_plot[i_plot])
+##   , xlab  = ""
+##   , ylab  = ""
+##   , col   = dat_sheet$dx_current
+##   , pch   = 20  #3
+##   , xlim  = c(1, nrow(dat_sheet) * 1.2)
+##   )
+##   text(
+##     x     = 1:nrow(dat_sheet)
+##   , y     = dat_sheet[[ var_list_plot[i_plot] ]]
+##   , labels = 1:nrow(dat_sheet)
+##   , pos   = 4 # 1 = below, 2 = left, 3 = above, 4 = right
+##   )
+## }
+## par(mfrow=c(1,1))
+```
+
+Determine outliers by IQR.
+```{r}
+## IQR_dist_max <- 5
+##
+## tab_outliers <- list()
+##
+## for (i_var in seq_along(var_list_plot)) {
+##   ## i_var = 1
+##   ## i_var = 33
+##   if (!is.numeric(dat_sheet[[ var_list_plot[i_var] ]])) {
+##     next
+##   }
+##   this_var <- dat_sheet[[ var_list_plot[i_var] ]]
+##   this_var_org <- this_var
+##   if (var_list_plot[i_var] %in% totransform.log2) {
+##     #this_var <- e_log_shift(this_var)
+##     this_var <- e_log_shift(this_var, min_add = 1, base_log = 2)
+##   }
+##   this_med <- median(this_var, na.rm = TRUE)
+##   this_iqr <- IQR(   this_var, na.rm = TRUE)
+##
+##   tab_outliers[[ var_list_plot[i_var] ]] <-
+##     tibble::tibble(
+##       Var           = var_list_plot[i_var]
+##     , demo_study_id = dat_sheet[[ "demo_study_id" ]]
+##     , Value         = this_var_org
+##     , Value_trans   = this_var
+##     , IQR_dist      = (this_var - this_med) / this_iqr
+##     ) %>%
+##     dplyr::filter(
+##       (IQR_dist >  IQR_dist_max) |
+##       (IQR_dist < -IQR_dist_max)
+##     )
+## }
+##
+## tab_outliers <-
+##   tab_outliers %>%
+##   dplyr::bind_rows()
+##
+## tab_outliers %>% print(n=Inf)
+```
+
+
+
+Drop extreme outlying values.
+```{r chunk-02}
+# # Drop extreme outlying values
+# # dat_sheet$fl_albumin_index       [dat_sheet$fl_albumin_index              ] <- NA  # obs
+# # dat_sheet$mri_dti_freewater_mean [dat_sheet$mri_dti_freewater_mean        ] <- NA  # obs
+# # dat_sheet$mri_dti_psmd           [dat_sheet$mri_dti_psmd                  ] <- NA  # obs
+# # dat_sheet$fl_myelin_basic_protein[dat_sheet$fl_myelin_basic_protein       ] <- NA  # obs
+# dat_sheet$fl_igg_index           [dat_sheet$fl_igg_index               <  0.2  ] <- NA  # obs 139
+# # dat_sheet$fl_angio_csf_bfgf      [dat_sheet$fl_angio_csf_bfgf             ] <- NA  # obs
+# # dat_sheet$fl_angio_csf_flt_1     [dat_sheet$fl_angio_csf_flt_1            ] <- NA  # obs
+# # dat_sheet$fl_angio_csf_plgf      [dat_sheet$fl_angio_csf_plgf             ] <- NA  # obs
+# # dat_sheet$fl_angio_csf_tie2      [dat_sheet$fl_angio_csf_tie2             ] <- NA  # obs
+# # dat_sheet$fl_angio_csf_vegf_a    [dat_sheet$fl_angio_csf_vegf_a           ] <- NA  # obs
+# # dat_sheet$fl_angio_csf_vegf_c    [dat_sheet$fl_angio_csf_vegf_c           ] <- NA  # obs
+# # dat_sheet$fl_angio_csf_vegf_d    [dat_sheet$fl_angio_csf_vegf_d           ] <- NA  # obs
+# # dat_sheet$fl_cyto_csf_il_1b      [dat_sheet$fl_cyto_csf_il_1b             ] <- NA  # obs
+# dat_sheet$fl_cyto_csf_il_2       [dat_sheet$fl_cyto_csf_il_2              ] <- NA  # obs
+# # dat_sheet$fl_cyto_csf_il_4       [dat_sheet$fl_cyto_csf_il_4              ] <- NA  # obs
+# # dat_sheet$fl_cyto_csf_il_6       [dat_sheet$fl_cyto_csf_il_6              ] <- NA  # obs
+# # dat_sheet$fl_cyto_csf_il_8       [dat_sheet$fl_cyto_csf_il_8              ] <- NA  # obs
+# # dat_sheet$fl_cyto_csf_ifn_g      [dat_sheet$fl_cyto_csf_ifn_g             ] <- NA  # obs
+# # dat_sheet$fl_cyto_csf_tnf_a      [dat_sheet$fl_cyto_csf_tnf_a             ] <- NA  # obs
+# # dat_sheet$fl_msd_csf_mmp_1       [dat_sheet$fl_msd_csf_mmp_1              ] <- NA  # obs
+# # dat_sheet$fl_msd_csf_mmp_2       [dat_sheet$fl_msd_csf_mmp_2              ] <- NA  # obs
+# # dat_sheet$fl_msd_csf_mmp_3       [dat_sheet$fl_msd_csf_mmp_3              ] <- NA  # obs
+# # dat_sheet$fl_msd_csf_mmp_9       [dat_sheet$fl_msd_csf_mmp_9              ] <- NA  # obs
+# # dat_sheet$fl_msd_csf_mmp_10      [dat_sheet$fl_msd_csf_mmp_10             ] <- NA  # obs
+# # dat_sheet$fl_ptau                [dat_sheet$fl_ptau                       ] <- NA  # obs
+# # dat_sheet$mri_perm_3t_tot        [dat_sheet$mri_perm_3t_tot            <  -6   ] <- NA  # obs 145
+# dat_sheet$percent_wmhv           [dat_sheet$percent_wmhv               < -10   ] <- NA  # obs 113, 137
+# # dat_sheet$demo_study_id          [dat_sheet$demo_study_id                 ] <- NA  # obs
+# # dat_sheet$demo_bl_age            [dat_sheet$demo_bl_age                   ] <- NA  # obs
+# # dat_sheet$demo_sex               [dat_sheet$demo_sex                      ] <- NA  # obs
+# # dat_sheet$demo_yrs_edu           [dat_sheet$demo_yrs_edu                  ] <- NA  # obs
+# # dat_sheet$dx_current             [dat_sheet$dx_current                    ] <- NA  # obs
+# dat_sheet$percent_hippo          [dat_sheet$percent_hippo              >   1   ] <- NA  # obs 1, 2
+# # dat_sheet$mri_mean_cort_thick_mm [dat_sheet$mri_mean_cort_thick_mm        ] <- NA  # obs
+# # dat_sheet$fl_abeta_4240_ratio    [dat_sheet$fl_abeta_4240_ratio           ] <- NA  # obs
+#
+#
+# var_list_plot_change <-
+#   c(
+#   #   "fl_albumin_index",
+#   # , "mri_dti_freewater_mean"
+#   # , "mri_dti_psmd"
+#   # , "fl_myelin_basic_protein"
+#     "fl_igg_index"
+#   # , "fl_angio_csf_bfgf"
+#   # , "fl_angio_csf_flt_1"
+#   # , "fl_angio_csf_plgf"
+#   # , "fl_angio_csf_tie2"
+#   # , "fl_angio_csf_vegf_a"
+#   # , "fl_angio_csf_vegf_c"
+#   # , "fl_angio_csf_vegf_d"
+#   # , "fl_cyto_csf_il_1b"
+#   # , "fl_cyto_csf_il_2"
+#   # , "fl_cyto_csf_il_4"
+#   # , "fl_cyto_csf_il_6"
+#   # , "fl_cyto_csf_il_8"
+#   # , "fl_cyto_csf_ifn_g"
+#   # , "fl_cyto_csf_tnf_a"
+#   # , "fl_msd_csf_mmp_1"
+#   # , "fl_msd_csf_mmp_2"
+#   # , "fl_msd_csf_mmp_3"
+#   # , "fl_msd_csf_mmp_9"
+#   # , "fl_msd_csf_mmp_10"
+#   # , "fl_ptau"
+#   , "mri_perm_3t_tot"
+#   , "percent_wmhv"
+#   # , "demo_study_id"
+#   # , "demo_bl_age"
+#   # , "demo_sex"
+#   # , "demo_yrs_edu"
+#   # , "dx_current"
+#   , "percent_hippo"
+#   # , "mri_mean_cort_thick_mm"
+#   # , "fl_abeta_4240_ratio"
+#   )
+```
+
+Plot again
+
+
+```{r, fig.height = 4, fig.width = 10}
+# var_list_plot <-
+#   c(var_list_plot_change)
+#
+# par(mfrow=c(1,3))
+# for (i_plot in seq_along(var_list_plot)) {
+#   ## i_plot = 1
+#   #if (i_plot > 3) {next}
+#
+#   plot(
+#     x     = 1:nrow(dat_sheet)
+#   , y     = dat_sheet[[ var_list_plot[i_plot] ]]
+#   , type  = "p"
+#   , main  = paste0("After: ", var_list_plot[i_plot])
+#   , xlab  = ""
+#   , ylab  = ""
+#   , col   = dat_sheet$dx_current
+#   , pch   = 20  #3
+#   , xlim  = c(1, nrow(dat_sheet) * 1.2)
+#   )
+#   text(
+#     x     = 1:nrow(dat_sheet)
+#   , y     = dat_sheet[[ var_list_plot[i_plot] ]]
+#   , labels = 1:nrow(dat_sheet)
+#   , pos   = 4 # 1 = below, 2 = left, 3 = above, 4 = right
+#   )
+# }
+# par(mfrow=c(1,1))
+```
+
+
+Normalize so color scale is meaningful
+
+```{r chunk-03}
+#normalize so color scale is meaningful
+
+# data for demographics, before z-score scaling
+dat_sheet_demo <-
+  #dat_sheet
+  dat_sub
+
+dat_sheet <-
+  #dat_sheet %>%
+  dat_sub %>%
+  dplyr::mutate(
+    # to allow log transformation when wmhv==0
+  #  percent_wmhv  = percent_wmhv + 0.00001
+  #  fl_cyto_csf_il_4 = ifelse(fl_cyto_csf_il_4 == 0.001, NA, fl_cyto_csf_il_4)
+  #  across(tidyselect::all_of(c(Var$csf, Var$plasma, Var$mri)), e_log_shift, min_add = 1, base_log = 2)
+    across(tidyselect::all_of(c(Var$csf, Var$plasma, Var$mri)), scale)
+  , across(tidyselect::all_of(c(Var$csf, Var$plasma, Var$mri)), as.numeric)
+  )
+  # %>%
+  #dplyr::mutate_if(is.numeric, scale) %>%
+
+# label dataset
+for (n_label in as.character(unlist(Var))) {
+  ## i_label = 1
+  labelled::var_label(dat_sheet     [[ n_label ]]) <- labelled::var_label(dat_sheet_demo[[ n_label ]])
+  #labelled::var_label(dat_sheet_demo[[ dat_var_label_matching$Var[i_label] ]]) <- dat_var_label_matching$Label[i_label]
+}
+```
+
+Determine outliers by IQR.
+```{r}
+IQR_dist_max <- 5
+
+tab_outliers <- list()
+
+for (i_var in seq_along(var_list_plot)) {
+  ## i_var = 1
+  ## i_var = 33
+  if (!is.numeric(dat_sheet[[ var_list_plot[i_var] ]])) {
+    next
+  }
+  this_var <- dat_sheet[[ var_list_plot[i_var] ]]
+  this_var_org <- this_var
+  #if (var_list_plot[i_var] %in% totransform.log2) {
+  #  #this_var <- e_log_shift(this_var)
+  #  this_var <- e_log_shift(this_var, min_add = 1, base_log = 2)
+  #}
+  this_med <- median(this_var, na.rm = TRUE)
+  this_iqr <- IQR(   this_var, na.rm = TRUE)
+
+  tab_outliers[[ var_list_plot[i_var] ]] <-
+    tibble::tibble(
+      Var           = var_list_plot[i_var]
+    , demo_study_id = dat_sheet[[ "ptid" ]]
+    , Value         = this_var_org
+    , Value_trans   = this_var
+    , IQR_dist      = (this_var - this_med) / this_iqr
+    ) %>%
+    dplyr::filter(
+      (IQR_dist >  IQR_dist_max) |
+      (IQR_dist < -IQR_dist_max)
+    )
+}
+
+tab_outliers <-
+  tab_outliers %>%
+  dplyr::bind_rows()
+
+tab_outliers %>% print(n=Inf)
+```
+
+
+### Plot on trasnformed scale
+
+```{r, fig.height = 4, fig.width = 10}
+# var_list_plot
+#   #<-
+#   #c(totransform.log2, tokeep)
+#
+# par(mfrow=c(1,3))
+# for (i_plot in seq_along(var_list_plot)) {
+#   ## i_plot = 1
+#   #if (i_plot > 3) {next}
+#
+#   plot(
+#     x     = 1:nrow(dat_sheet)
+#   , y     = dat_sheet[[ var_list_plot[i_plot] ]]
+#   , type  = "p"
+#   , main  = paste0("After trans: ", var_list_plot[i_plot])
+#   , xlab  = ""
+#   , ylab  = ""
+#   , col   = dat_sheet$dx_current
+#   , pch   = 20  #3
+#   , xlim  = c(1, nrow(dat_sheet) * 1.2)
+#   )
+#   text(
+#     x     = 1:nrow(dat_sheet)
+#   , y     = dat_sheet[[ var_list_plot[i_plot] ]]
+#   , labels = 1:nrow(dat_sheet)
+#   , pos   = 4 # 1 = below, 2 = left, 3 = above, 4 = right
+#   )
+# }
+# par(mfrow=c(1,1))
+```
+
+
+
+
+```{r chunk-04, fig.height = 4, fig.width = 8}
+#get regression coefficients for reduced model
+
+source("./model_sel_new.R")
+
+lm_criterion <- c("AIC", "BIC")[2]
+
+## model selection
+f_model_sel <-
+  function(
+    dat_this      = dat_lm
+  , lm_criterion  = c("AIC", "BIC")[1]
+  ) {
+
+  if (lm_criterion == "AIC") { AIC_k = 2                     }
+  if (lm_criterion == "BIC") { AIC_k = log(nrow( dat_this )) }
+
+  results_list     <- list()
+  results_list$mod <- f_formula_init()
+  results_list$fit <- list()
+  results_list$AIC <- list()
+
+  for (i_mod in seq_len(length(results_list$mod))) {
+    ## i_mod = 1
+
+    results_list$fit[[i_mod]] <-
+      lm(
+        formula = results_list$mod[[i_mod]]
+      , data    = dat_this
+      )
+
+    results_list$AIC[[i_mod]] <-
+      results_list$fit[[i_mod]] %>%
+      AIC(k = AIC_k)
+  }
+
+  ## some models have a term with 0 df, skip this model
+  # first remove models with no error estimate
+  results_list$AIC[ results_list$AIC == -Inf ] <- Inf
+  # then remove models with 0 df
+  sw_df_zero <- TRUE
+  while(sw_df_zero) {
+    # select lowest AIC, index
+    ind_min_AIC <-
+      results_list$AIC %>%
+      unlist() %>%
+      which.min()
+
+    sw_df_zero <-
+      any(
+        results_list$fit[[ind_min_AIC]] %>%
+        car::Anova(type = 3, singular.ok = TRUE) %>%
+        pull(Df)
+          ==
+        0
+      )
+
+    if (sw_df_zero) {
+      print("Skipping 0-df model")
+      #results_list$mod[[ind_min_AIC]] <- NULL
+      #results_list$fit[[ind_min_AIC]] <- NULL
+      #results_list$AIC[[ind_min_AIC]] <- NULL
+      results_list$AIC[[ind_min_AIC]] <- Inf
+    } # if
+  } # while
+
+  # selected model
+  results <-
+    results_list$fit[[ind_min_AIC]]
+
+  return(results)
+} # f_model_sel
+
+
+
+list_var_resp <-
+  c("fl_albumin_index_log2", "mri_perm_3t_tot",  "fl_csf__ALL__gfap_log2","fl_plasma__ALL__gfap_log2")
+ind_var_covar <-
+  var_list_plot %notin%
+    c("ptid","age","sex","demo_edu_yrs","dx_current",
+      "fl_albumin_index_log2","mri_perm_3t_tot_log2","mri_perm_3t_tot",
+      "fl_csf__ALL__gfap_log2","fl_plasma__ALL__gfap_log2")
+list_var_covar <-
+  var_list_plot[ind_var_covar]
+
+results <- list()
+
+for (i_resp in seq_along(list_var_resp)) {
+  for (i_covar in seq_along(list_var_covar)) {
+    ## i_resp = 2
+    ## i_covar = 6
+    ## i_resp = 1
+    ## i_covar = 1
+    ## i_resp = 1
+    ## i_covar = 23
+
+    var_resp  <- list_var_resp[i_resp]
+    var_covar <- list_var_covar[i_covar]
+
+    print(paste0("BEGIN  Resp: ", i_resp, " ", var_resp, ",  Covar: ", i_covar, " ", var_covar, "  ===================================================="))
+
+    if (i_covar == 1) {
+      results[[var_resp]] <- list()
+    }
+    results[[var_resp]][[var_covar]] <- list()
+
+    # subset of data for linear model
+    dat_lm <-
+      dat_sheet %>%
+      dplyr::select(
+        all_of(var_resp)
+      , all_of(var_covar)
+      , age
+      , sex
+      #, demo_edu_yrs  # 3/9/2022 Educ added
+      ) %>%
+      dplyr::mutate(
+        Y = !!sym(var_resp)
+      , X = !!sym(var_covar)
+      ) %>%
+      tidyr::drop_na() %>%
+      tidyr::as_tibble()
+    n_sample <- nrow(dat_lm)
+
+    if (n_sample == 0) {
+      next
+    }
+
+
+    form_lm <-
+      as.formula(
+        paste0(
+        #  var_resp
+          "Y"
+        , " ~ "
+        , "age"
+        , " + "
+        , "sex"
+        #, " + "
+        #, "demo_edu_yrs"    # 3/9/2022 Educ added
+        , " + "
+        #, var_covar
+        , "X"
+        , " + "
+        #, paste0("age", ":", var_covar)
+        , paste0("age", ":", "X")
+        , " + "
+        #, paste0("sex", ":", var_covar)
+        , paste0("sex", ":", "X")
+        #, " + "
+        #, paste0("demo_edu_yrs", ":", "X")    # 3/9/2022 Educ added
+        )
+      )
+
+    results[[var_resp]][[var_covar]][["form_lm"]] <- form_lm
+    results[[var_resp]][[var_covar]][["dat_lm" ]] <- dat_lm
+
+    results[[var_resp]][[var_covar]][["lm_fit_full"]] <-
+      lm(
+        formula = form_lm
+      , data    = dat_lm
+      )
+
+    ## results[[var_resp]][[var_covar]][["lm_fit_red_BIC"]] <-
+    ##   stats::step(
+    ##     object = results[[var_resp]][[var_covar]][["lm_fit_full"]]
+    ##   , direction = "both"
+    ##   , test = "F"
+    ##   , trace = 0
+    ##   , k = log(nrow(dat_lm))
+    ##   )
+
+    results[[var_resp]][[var_covar]][["lm_fit_red_BIC"]] <-
+      f_model_sel(
+        dat_this      = dat_lm
+      , lm_criterion  = lm_criterion
+      )
+
+
+    results[[var_resp]][[var_covar]][["lm_fit_full"]]$df.residual
+
+    ### 7/8/2022 report all results
+    ## skip if model selection removed our x variable
+    if (!("X" %in% names(coef(results[[var_resp]][[var_covar]][["lm_fit_red_BIC"]])))) {
+      print("Model selection removed X variable")
+      results[[var_resp]][[var_covar]]$sw_sig_X <- FALSE
+      #next
+    } else {
+      results[[var_resp]][[var_covar]]$sw_sig_X <- TRUE
+    }
+
+    print(summary(results[[var_resp]][[var_covar]][["lm_fit_red_BIC"]]))
+
+    # plot residuals
+    plot(results[[var_resp]][[var_covar]][["lm_fit_red_BIC"]], which = c(1))
+
+    # Scatterplot for fitted reduced model
+
+    covar_names_red <- names(coef(results[[var_resp]][[var_covar]][["lm_fit_red_BIC"]]))
+
+    dat_pred <-
+      tidyr::expand_grid(
+        X = dat_lm[["X"]] %>% range()
+      , age  = c(0, dat_lm[["age"]] %>% quantile(probs = c(0.10, 0.90))) %>% as.numeric()
+      , sex     = dat_lm[["sex"]] %>% unique()
+      #, demo_edu_yrs = c(0, dat_lm[["demo_edu_yrs"]] %>% quantile(probs = c(0.10, 0.90))) %>% as.numeric()
+      )
+
+    ## if (
+    ##   ("age"  %in% covar_names_red) &
+    ##   ("sexMale" %in% covar_names_red) #&
+    ##   #("demo_edu_yrs" %in% covar_names_red)
+    ## ) {
+    ##   dat_pred <-
+    ##     tidyr::expand_grid(
+    ##       X = dat_lm[["X"]] %>% range()
+    ##     , age  = c(0, dat_lm[["age"]] %>% quantile(probs = c(0.10, 0.90))) %>% as.numeric()
+    ##     , sex     = dat_lm[["sex"]] %>% unique()
+    ##     , demo_edu_yrs = c(0, dat_lm[["demo_edu_yrs"]] %>% quantile(probs = c(0.10, 0.90))) %>% as.numeric()
+    ##     )
+    ## } else if (
+    ##   ("age" %in% covar_names_red)
+    ## ) {
+    ##   dat_pred <-
+    ##     tidyr::expand_grid(
+    ##       X = dat_lm[["X"]] %>% range()
+    ##     , age = c(0, dat_lm[["age"]] %>% quantile(probs = c(0.10, 0.90))) %>% as.numeric()
+    ##     #, sex = dat_lm[["sex"]] %>% unique()
+    ##     )
+    ## } else if (
+    ##   ("sexMale" %in% covar_names_red)
+    ## ) {
+    ##   dat_pred <-
+    ##     tidyr::expand_grid(
+    ##       X = dat_lm[["X"]] %>% range()
+    ##     #, age = c(0, dat_lm[["age"]] %>% quantile(probs = c(0.10, 0.90))) %>% as.numeric()
+    ##     , sex = dat_lm[["sex"]] %>% unique()
+    ##     )
+    ## } else {
+    ##   # only X is significant
+    ##   dat_pred <-
+    ##     tidyr::expand_grid(
+    ##       X = dat_lm[["X"]] %>% range()
+    ##     #, age = c(0, dat_lm[["age"]] %>% quantile(probs = c(0.10, 0.90))) %>% as.numeric()
+    ##     #, sex = dat_lm[["sex"]] %>% unique()
+    ##     )
+    ## }
+
+    dat_pred$Y <-
+      predict(
+        results[[var_resp]][[var_covar]][["lm_fit_red_BIC"]]
+      , newdata = dat_pred
+      )
+
+    dat_pred <-
+      dat_pred %>%
+      dplyr::mutate(
+        age  = age  %>% factor(labels = c("10%", "Mean", "90%"))
+      #, demo_edu_yrs = demo_edu_yrs %>% factor(labels = c("10%", "Mean", "90%"))
+      )
+
+    ## if ("age" %in% covar_names_red) {
+    ##   dat_pred <-
+    ##     dat_pred %>%
+    ##     dplyr::mutate(
+    ##       age = age %>% factor(labels = c("10%", "Mean", "90%"))
+    ##     )
+    ## }
+    ## if ("demo_edu_yrs" %in% covar_names_red) {
+    ##   dat_pred <-
+    ##     dat_pred %>%
+    ##     dplyr::mutate(
+    ##       demo_edu_yrs = demo_edu_yrs %>% factor(labels = c("10%", "Mean", "90%"))
+    ##     )
+    ## }
+
+    library(ggplot2)
+    if ("sexFemale" %in% covar_names_red) {
+      p <- ggplot(dat_lm, aes(x = X, y = Y, shape = sex, colour = sex))
+    } else {
+      p <- ggplot(dat_lm, aes(x = X, y = Y))
+    }
+    p <- p + theme_bw()
+    p <- p + geom_point(size = 2, alpha = 1/2)
+    if ("age" %in% covar_names_red) {
+      p <- p + geom_line(data = dat_pred, aes(linetype = age), size = 0.75)
+    } else {
+      p <- p + geom_line(data = dat_pred, size = 0.75)
+    }
+    # 3/9/2022 Educ added  XXX
+
+    p <- p + scale_linetype_manual(values = c(2, 1, 3))
+    p <- p + labs(  title = NULL
+                  #, subtitle = "Progress and Starting Current"
+                  , x = labelled::var_label(dat_sheet[[var_covar]])
+                  , y = labelled::var_label(dat_sheet[[var_resp ]])
+                  #, caption = paste0(  "Model fit averages the numeric variables of Age, A1c, and PAM-10\n"
+                  #                   , "  over Program, Diagnosis, Gender, and General health.\n"
+                  #                   , "Dotted vertical lines indicate cutoffs between depression categories:\n"
+                  #                   , "  None-minimal, Mild, Moderate, Moderately Severe, and Severe."
+                  #                   )
+                  , colour    = "Gender"
+                  , shape     = "Gender"  # "Imputed"
+                  , linetype  = "Age"  #"Diagnosis"
+                  #, fill      = "Diagnosis"
+                  )
+    #p <- p + theme(plot.caption = element_text(hjust = 0))
+    #p <- p + theme(legend.position = "bottom")
+    #p <- p + guides(colour = guide_legend(nrow = 2), shape = guide_legend(nrow = 2))
+    n_sample_annotate <- paste0("N=",n_sample)
+    #p <- p + annotate("text", -Inf, -Inf, label=n_sample_annotate, hjust=-0.3, vjust=-1, colour = "gray25")
+    p <- p + annotate("text", x=-Inf, y= Inf, label=n_sample_annotate, hjust=-0.3, vjust=2, colour = "gray25")
+    print(p)
+
+    results[[var_resp]][[var_covar]][["plot_lm_fit_red_BIC"]] <-
+      p
+
+    print(paste0("END    Resp: ", i_resp, " ", var_resp, ",  Covar: ", i_covar, " ", var_covar, "  ===================================================="))
+    print("")
+    print("")
+    print("")
+    print("")
+    print("")
+    print("")
+    print("")
+    print("")
+
+
+  } # i_covar
+} # i_resp
+
+```
+
+
+```{r chunk-05}
+#create matrices
+ind_row <-
+  #c(totransform.log2, tokeep) %notin%
+  #  c("ptid","age","sex","demo_edu_yrs","dx_current","fl_albumin_index_log2","mri_perm_3t_tot")
+  as.character(unlist(Var)) %notin%
+    c("ptid","age","sex","demo_edu_yrs","dx_current","fl_albumin_index_log2","mri_perm_3t_tot")
+n_row <-
+  #c(totransform.log2, tokeep)[ind_row]
+  as.character(unlist(Var))[ind_row]
+
+l_row <-
+  length(n_row)
+
+n_col <-
+  #c("Age", "Gender", "Education", "X", "Age:X", "Gender:X", "Education:X")
+  c("Age", "Gender",              "X", "Age:X", "Gender:X"               )
+l_col <-
+  length(n_col)
+
+# fill matrices with the signficant estimates, leave other cells blank
+
+l_var_resp <- c("fl_albumin_index_log2", "mri_perm_3t_tot_log2",
+                "fl_csf__ALL__gfap_log2", "fl_plasma__ALL__gfap_log2")
+
+
+results_fit <- list()
+i_results <- 0
+
+for (i_resp in seq_along(l_var_resp)) {
+  ## i_resp = 1
+  for (i_covar in seq_along(n_row)) {
+    ## i_covar = 1
+
+    var_row <- n_row[i_covar]
+    var_col <- l_var_resp[i_resp]
+
+    exists <- results[[var_col]][[var_row]]
+
+    if(length(results[[var_col]][[var_row]]) == 0) {
+      next
+    }
+
+    i_results <- i_results + 1
+
+    results_fit[[ i_results ]] <-
+      results[[var_col]][[var_row]][["lm_fit_red_BIC"]] |>
+      summary() |>
+      broom::tidy() |>
+      dplyr::mutate(
+        term  =
+          term |>
+          stringr::str_replace_all(
+            pattern     = stringr::fixed("sexFemale")
+          , replacement = "Gender"
+          ) |>
+          stringr::str_replace_all(
+            pattern     = stringr::fixed("age")
+          , replacement = "Age"
+          )
+      , Covar =
+          term |>
+          stringr::str_replace_all(
+            pattern     = stringr::fixed("X")
+          , replacement = var_row
+          )
+      , resp  = var_col
+      , covar = var_row
+      , n     = results[[var_col]][[var_row]][[ "dat_lm" ]] |> nrow()
+      ) |>
+      dplyr::relocate(
+        resp
+      , covar
+      )
+
+  } # i_covar
+} # i_resp
+
+dat_plot <-
+  results_fit |>
+  dplyr::bind_rows() |>
+  dplyr::rename(
+  #  Var   = covar
+    Coef  = estimate
+  , pvals = p.value
+  ) %>%
+  dplyr::mutate(
+    pvals_stars =
+      pvals %>%
+      e_pval_stars(
+        cutpoints = c(0, 0.001, 0.01, 0.05, 1)
+      , symbols = c("***", "**", "*", " ")
+      )
+  ) %>%
+  left_join(
+    dat_var_label_matching
+  , by = dplyr::join_by(covar == Var)
+  ) %>%
+  left_join(
+    e_data_var_labels_table_from_data(dat_sheet)
+  , by = dplyr::join_by(covar == Var)
+  ) %>%
+  dplyr::rename(
+    Label_covar = Label
+  ) %>%
+  left_join(
+    e_data_var_labels_table_from_data(dat_sheet)
+  , by = dplyr::join_by(resp == Var)
+  ) %>%
+  dplyr::rename(
+    Label_resp = Label
+  ) %>%
+  dplyr::mutate(
+    Label_covar = Label_covar |> factor()
+  , Label_resp  = Label_resp  |> factor()
+  , term        = term        |> factor(levels = c("(Intercept)", n_col))
+  )
+```
+
+
+```{r chunk-06, fig.height = 4, fig.width = 10}
+#plots
+
+#merged<-cbind(coef_mat,coef_mat_mri)
+#merged_p<-cbind(p_mat,p_mat_mri)
+
+#tiff("coef_plot_withtitle.png", height = 8, width =6, units="in",res=300)
+
+# corrplot(merged,method="square",is.corr=FALSE,col.lim=c(-1,.6),cl.ratio = 0.2,cl.pos="r",win.asp = .5,tl.pos="lt",tl.cex =0.8,tl.srt = 80,cl.cex = .6,tl.col=("gray20"),na.label=" ",sig.level=c(0.001, 0.01, 0.05),p.mat =merged_p,insig="label_sig",pch.cex = 1.5,pch.col = ("gray20"),mar=c(0,0,1,0),title="                                       Albumin Index       MRI WM Permeability")
+
+#dev.off()
+
+```
+
+Erik ggplot version
+
+```{r chunk-07}
+
+#dat_plot <-
+#  dplyr::full_join(
+#    dplyr::bind_rows(
+#      #coef_mat %>%
+#      results_fit %>%
+#      as_tibble(rownames = "Var") %>%
+#      dplyr::mutate(
+#        RespVar = "Albumin Index"
+#      )
+#    , coef_mat_mri %>%
+#      as_tibble(rownames = "Var") %>%
+#      dplyr::mutate(
+#        RespVar = "MRI WM Permeability"
+#      )
+#    ) %>%
+#    tidyr::pivot_longer(
+#      cols = -c(Var, RespVar)
+#    , names_to = "Covar"
+#    , values_to = "Coef"
+#    )
+#  , dplyr::bind_rows(
+#      p_mat %>%
+#      as_tibble(rownames = "Var") %>%
+#      dplyr::mutate(
+#        RespVar = "Albumin Index"
+#      )
+#    , p_mat_mri %>%
+#      as_tibble(rownames = "Var") %>%
+#      dplyr::mutate(
+#        RespVar = "MRI WM Permeability"
+#      )
+#    ) %>%
+#    tidyr::pivot_longer(
+#      cols = -c(Var, RespVar)
+#    , names_to = "Covar"
+#    , values_to = "pvals"
+#    )
+#  , by = c("Var", "RespVar", "Covar")
+#  ) %>%
+#  dplyr::mutate(
+#  #  Var = Var %>% stringr::str_replace_all(pattern = stringr::fixed("_"), replacement = " ")
+#  #, Var = Var %>% stringr::str_replace_all(c("fl" = "","csf" = "","t 1" = "flt-1"))
+#    pvals_stars =
+#      pvals %>%
+#      e_pval_stars(
+#        cutpoints = c(0, 0.001, 0.01, 0.05, 1)
+#      , symbols = c("***", "**", "*", " ")
+#      )
+#  ) %>%
+#  left_join(
+#    dat_var_label_matching
+#  ) %>%
+#  left_join(
+#    e_data_var_labels_table_from_data(dat_sheet)
+#  ) %>%
+#  dplyr::mutate(
+#    Label = Label |> factor()
+#  , Covar = Covar %>% factor(levels = n_col)
+#  )
+
+# p-value plot
+library(ggplot2)
+#p1 <- ggplot(data = dat_plot, aes(x = Covar, y = Label, fill = Coef))  # y = Var
+p1 <- ggplot(data = dat_plot, aes(x = term, y = Label_covar, fill = Coef))  # y = Var
+#p1 <- p1 + theme_bw()
+p1 <- p1 + geom_tile(na.rm = TRUE)
+p1 <- p1 + scale_y_discrete(limits = rev)
+#p1 <- p1 + scale_fill_gradientn(limits = c(-1.0, 0.6), values = scales::rescale(c(0,0.1,1)), colors = c("#000000", "#AAAAAA", "#DDDDDD"), breaks = c(0, 0.1, 0.5, 1), na.value = "white")
+p1 <- p1 + scale_fill_gradient2(low = "blue", mid = "white", high = "red", breaks = seq(-100, 100, by = 2), na.value = "gray90")
+p1 <- p1 + geom_text(aes(label = pvals_stars), vjust = 0.5, colour = "white")
+p1 <- p1 + geom_text(data = dat_plot |> dplyr::filter(term == "(Intercept)")
+              , aes(label = n), hjust = 0, vjust = 0.5, colour = "black"
+              )
+#p1 <- p1 + facet_grid(. ~ RespVar, space = "free", scales = "free_y", drop = TRUE)
+p1 <- p1 + facet_grid(Type ~ Label_resp, space = "free", scales = "free_y", drop = TRUE)
+p1 <- p1 + theme(#axis.text.x = element_text(angle = 90, vjust = 0, hjust = 1)
+               axis.text.y = element_text(hjust = 0)
+            )  #, panel.grid.major = element_blank(), panel.grid.minor = element_blank())
+p1 <- p1 + theme(axis.text.x = element_text(angle = 45, vjust = 1, hjust = 1)) # rotate labels
+p1 <- p1 + theme(axis.text.y = element_text(hjust = 1))
+#p1 <- p1 + theme(legend.key.height = unit(0.30, "in"))
+p1 <- p1 + theme(plot.caption = element_text(hjust = 0), plot.caption.position =  "plot") # caption left align
+p1 <- p1 + theme(legend.position = "bottom") # "none"
+p1 <- p1 + theme(legend.key.height = unit(0.1, "in"), legend.key.width = unit(0.4, "in"))
+
+if (lm_criterion == c("AIC", "BIC")[1]) {
+  p1 <- p1 + labs(
+                  title = "Models selected by AIC"
+                  )
+}
+if (lm_criterion == c("AIC", "BIC")[2]) {
+  p1 <- p1 + labs(
+                  title = "Models selected by BIC"
+                  )
+}
+p1 <- p1 + labs(
+              #, subtitle = "Longitudinal mixed model"
+                y = "Standardized covariates (\"X\")"
+              , x = "Model covariates"
+              , fill = "Model\nCoefficients  "  # "FDR\np-value"
+              , caption = paste0(
+                            "p-value stars:  (blank): p >= 0.05;   *: p < 0.05;   **: p < 0.01;   *** : p < 0.001"
+                          , "\np-values are uncorrected for family-wise Type-I error rate."
+                          #, "\nModels displayed are those where X variable is retained after model selection"
+                          )
+              )
+
+print(p1)
+
+ggsave(
+    "out_new/Fig2_plot_coef_pval.png"
+  , plot   = p1
+  , width  = 10
+  , height = 16
+  ## png, jpeg
+  , dpi    = 300
+  , bg     = "white"
+  ## pdf
+  #, units  = "in"
+  #, useDingbats = FALSE  # https://stackoverflow.com/questions/9992275/ggplot2-pdf-import-in-adobe-illustrator-missing-font-adobepistd
+  )
+
+ggsave(
+    "out_new/Fig2_plot_coef_pval.pdf"
+  , plot   = p1
+  , width  = 10
+  , height = 16
+  ## png, jpeg
+  #, dpi    = 300
+  #, bg     = "white"
+  ## pdf
+  , units  = "in"
+  , useDingbats = FALSE  # https://stackoverflow.com/questions/9992275/ggplot2-pdf-import-in-adobe-illustrator-missing-font-adobepistd
+  )
+
+## #p_alb_mriperm_coef_pval <- p1
+##
+## # ggsave(
+## #     paste0("plot_alb_mriperm_coef_pval_", lm_criterion, ".png")
+## #   , plot   = p1
+## #   , width  = 6
+## #   , height = 8
+## #   ## png, jpeg
+## #   , dpi    = 300
+## #   , bg     = "white"
+## #   ## pdf
+## #   #, units  = "in"
+## #   #, useDingbats = FALSE  # https://stackoverflow.com/questions/9992275/ggplot2-pdf-import-in-adobe-illustrator-missing-font-adobepistd
+## #   )
+## # ggsave(
+## #     paste0("plot_alb_mriperm_coef_pval_", lm_criterion, ".pdf")
+## #   , plot   = p1
+## #   , width  = 6
+## #   , height = 8
+## #   ## png, jpeg
+## #   #, dpi    = 300
+## #   #, bg     = "white"
+## #   ## pdf
+## #   , units  = "in"
+## #   , useDingbats = FALSE  # https://stackoverflow.com/questions/9992275/ggplot2-pdf-import-in-adobe-illustrator-missing-font-adobepistd
+## #   )
+
+```
+
+Individual plots associated with significant covariates.
+```{r}
+dat_plot_sub_indy <-
+  dat_plot |>
+  dplyr::filter(
+    term == "X"
+  )
+
+plot_results <- list()
+
+for (i_row in seq_len(nrow(dat_plot_sub_indy))) {
+  ## i_row = 1
+
+  var_resp  <- dat_plot_sub_indy$resp [i_row]
+  var_covar <- dat_plot_sub_indy$covar[i_row]
+
+  plot_results[[ i_row ]] <-
+    results[[var_resp]][[var_covar]][["plot_lm_fit_red_BIC"]]
+} # i_row
+
+#plot_results
+
+
+p_arranged <-
+  cowplot::plot_grid(
+    plotlist = plot_results
+  , nrow = 7
+  , ncol = 3
+  )
+ggsave(
+    paste0("out_new/plot_results_indy", ".png")
+  , plot   = p_arranged
+  , width  = 12
+  , height = 14
+  ## png, jpeg
+  , dpi    = 300
+  , bg     = "white"
+  ## pdf
+  #, units  = "in"
+  #, useDingbats = FALSE
+  )
+
+
+
+```
+
+
+
+
+
+
+```{r, eval = TRUE}
+# XXX-xxx
+######################################## ########################################
+#######        STOP EVAL        ######## #######        STOP EVAL        ########
+######################################## ########################################
+knitr::opts_chunk$set(eval = FALSE)  # TRUE
+######################################## ########################################
+#######        STOP EVAL        ######## #######        STOP EVAL        ########
+######################################## ########################################
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+## Choose scatterplots with model fit lines for paper
+
+```{r chunk-08}
+
+# ggsave(
+#     "plot_NAME_ME"
+#   , plot   = [[SOME PLOT HERE]]
+#   , width  = 6
+#   , height = 8
+#   ## png, jpeg
+#   #, dpi    = 300
+#   #, bg     = "white"
+#   ## pdf
+#   , units  = "in"
+#   , useDingbats = FALSE  # https://stackoverflow.com/questions/9992275/ggplot2-pdf-import-in-adobe-illustrator-missing-font-adobepistd
+#   )
+
+```
+
+```{r chunk-09}
+#comparisons by dx and by patient status
+
+mri.bydx=kruskal.test(mri_perm_3t_tot ~ dx_current,data=dat_sheet)
+mri.bydx
+
+mri.pairwise=dunn.test(dat_sheet$mri_perm_3t_tot,dat_sheet$dx_current,method="holm",altp = TRUE)
+
+alb.bydx=kruskal.test(fl_albumin_index_log2 ~ dx_current,data=dat_sheet)
+alb.bydx
+
+alb.pairwise<- dunn.test(dat_sheet$fl_albumin_index_log2,dat_sheet$dx_current,method="holm", altp = TRUE)
+
+
+#albumin vs. mri perm
+
+perms <- cor.test(dat_sheet$fl_albumin_index_log2, dat_sheet$mri_perm_3t_tot, method="spearman")
+
+coor_MRI_Albumin <-e_plot_scatterplot(dat_plot =dat_sheet,  var_x= "fl_albumin_index_log2", var_y= "mri_perm_3t_tot_log2", smooth_all = c("none", "loess", "lm", "glm", "gam")[3],)
+
+ggsave(
+    "All_figures_for_paper/coor_MRI_Albumin.png"
+  , plot   = coor_MRI_Albumin
+  , width  = 6
+  , height = 4
+  ## png, jpeg
+  , dpi    = 300
+  , bg     = "white"
+  ## pdf
+  #, units  = "in"
+  #, useDingbats = FALSE  # https://stackoverflow.com/questions/9992275/ggplot2-pdf-import-in-adobe-illustrator-missing-font-adobepistd
+  )
+
+
+library(dplyr)
+library(gt)
+
+# Create summary data frame from your results
+comparison_results <- data.frame(
+  Variable = c("MRI WM Permeability", "Albumin Index (log2)"),
+  KW_ChiSq = c(17.118, 18.707),
+  KW_df = c(4, 4),
+  KW_pvalue = c(0.001834, 0.0008973),
+  Significant_Pairs = c(
+    "AD-Mixed (p=0.029), AD-SIVD (p=0.006), LA-SIVD (p=0.047)",
+    "LA-SIVD (p=0.0004)"
+  )
+)
+
+# Create GT table
+tbl <- comparison_results %>%
+  gt() %>%
+  tab_header(
+    title = "Table 1. Kruskal-Wallis and Post-hoc Comparisons by Diagnosis",
+    subtitle = "MRI Permeability and Albumin Index across diagnostic groups"
+  ) %>%
+  cols_label(
+    Variable = "Measure",
+    KW_ChiSq = "χ²",
+    KW_df = "df",
+    KW_pvalue = "p-value",
+    Significant_Pairs = "Significant Pairwise Comparisons (Dunn test, Holm adjusted)"
+  ) %>%
+  fmt_number(
+    columns = c(KW_ChiSq),
+    decimals = 3
+  ) %>%
+  fmt_number(
+    columns = c(KW_pvalue),
+    decimals = 4
+  ) %>%
+  tab_style(
+    style = cell_text(weight = "bold"),
+    locations = cells_column_labels()
+  ) %>%
+  tab_style(
+    style = cell_fill(color = "lightgray"),
+    locations = cells_body(
+      columns = KW_pvalue,
+      rows = KW_pvalue < 0.05
+    )
+  ) %>%
+  tab_footnote(
+    footnote = "AD: Alzheimer's disease; LA: leukoaraiosis; Mixed: mixed dementia; SIVD: subcortical ischemic vascular dementia; MI: mild impairment",
+    locations = cells_column_labels(columns = Significant_Pairs)
+  ) %>%
+  tab_footnote(
+    footnote = "Spearman correlation between MRI permeability and Albumin index: rho = 0.136, p = 0.276",
+    locations = cells_title()
+  ) %>%
+  tab_options(
+    table.font.size = 12,
+    heading.title.font.size = 14,
+    heading.subtitle.font.size = 12
+  )
+
+# Display table
+tbl
+
+```
+
+
+## Figures for manuscript
+
+### Figure 1
+
+```{r chunk-10}
+#plots
+
+#basic plots
+
+# Scatterplot MRI Perm and Albumin
+bothperm <- dat_sheet %>% select(fl_albumin_index_log2,mri_perm_3t_tot)
+bothperm <- na.omit(bothperm)
+both_sample <- nrow(bothperm)
+both_annotate <- paste0("N=",both_sample)
+plot.perms <-
+  ggplot(data = dat_sheet, aes(x = fl_albumin_index_log2, y = mri_perm_3t_tot)) +
+  theme_bw() +
+  geom_hline(aes(yintercept = 0), colour = "black", linetype = "solid", size = 0.2, alpha = 0.15) +
+  geom_vline(aes(xintercept = 0), colour = "black", linetype = "solid", size = 0.2, alpha = 0.15) +
+  geom_point(size=2, alpha=0.3) +
+  stat_ellipse(level = 0.80) +
+  labs(
+    subtitle = "Albumin Index vs.\n  MRI WM Permeability"
+  , x = labelled::var_label(dat_sheet$fl_albumin_index_log2)
+  , y = labelled::var_label(dat_sheet$mri_perm_3t_tot)
+  ) +
+  #theme(plot.title = element_text(hjust = 0.5)) +
+  annotate(geom = "text", x = -Inf, y =  Inf, label = paste0(both_annotate, ", r=0.0856, p=0.505"), hjust = -0.05, vjust = 2, colour = "gray25")
+  # +
+  #annotate(geom = "text", x = -Inf, y = -Inf, label =           , hjust = -0.3, vjust = -1, color = "gray50")
+
+#print(plot.perms)
+
+
+# MRI Perm
+plot.mri <-
+  ggplot(data = dat_sheet,aes(x = dx_current, y = mri_perm_3t_tot)) +
+  theme_bw() +
+  geom_hline(aes(yintercept = 0), colour = "black", linetype = "solid", size = 0.2, alpha = 0.15) +
+  geom_boxplot(outlier.shape=NA) +
+  geom_jitter(size=2, alpha=.3, width=0.15) +
+  labs(
+    subtitle = "MRI WM Permeability\n  Differences by Diagnosis"
+  , x = "Diagnosis"
+  , y = labelled::var_label(dat_sheet$mri_perm_3t_tot)
+  ) +
+  #theme(plot.title = element_text(hjust = 0.5)) +
+  scale_y_continuous(limits = c(-3,3.25))
+  #ylim(-3,3)
+
+stat.test <- tibble::tribble(
+  ~group1, ~group2,   ~p.adj,
+    "AD",     "MX", 0.0013,
+    "AD",   "SIVD", 0.0001,
+    "LA",     "MX", 0.0171,
+    "LA",   "SIVD", 0.0103
+  )
+
+plot.mri <- plot.mri + stat_pvalue_manual(stat.test,
+    y.position = 1.75, step.increase = 0.12,
+    label = "p.adj"
+    )
+
+tab_n <-
+  dat_sheet %>%
+  dplyr::select(
+    dx_current
+  , mri_perm_3t_tot
+  ) %>%
+  dplyr::filter(
+    !is.na(mri_perm_3t_tot)
+  ) %>%
+  e_table_sum_freq_prop(
+    var_names = "dx_current"
+  ) %>%
+  dplyr::mutate(
+    label = paste0("N=", n)
+  )
+
+plot.mri <- plot.mri + geom_text(data = tab_n, aes(x = dx_current, y = -Inf, label = label), vjust = -1, colour = "gray25")
+
+#print(plot.mri)
+
+
+# Albumin
+plot.alb <-
+  ggplot(data = dat_sheet,aes(x = dx_current, y = fl_albumin_index_log2)) +
+  theme_bw() +
+  geom_hline(aes(yintercept = 0), colour = "black", linetype = "solid", size = 0.2, alpha = 0.15) +
+  geom_boxplot(outlier.shape=NA) +
+  geom_jitter(size=2, alpha=.3, width=0.15) +
+  labs(
+    subtitle = "Albumin Index\n  Differences by Diagnosis"
+  , x = "Diagnosis"
+  , y = labelled::var_label(dat_sheet$fl_albumin_index_log2)
+  )  +
+  #theme(plot.title = element_text(hjust = 0.5))
+  scale_y_continuous(limits = c(-3,3.25))
+
+
+stat.test.alb <- tibble::tribble(
+  ~group1, ~group2,   ~p.adj,
+    "AD",     "LA", 0.0190,
+    "LA",   "SIVD", 0.0003
+)
+
+plot.alb <- plot.alb + stat_pvalue_manual(stat.test.alb,
+    y.position = 2.5, step.increase = 0.12,
+    label = "p.adj"
+    )
+
+tab_n <-
+  dat_sheet %>%
+  dplyr::select(
+    dx_current
+  , fl_albumin_index_log2
+  ) %>%
+  dplyr::filter(
+    !is.na(fl_albumin_index_log2)
+  ) %>%
+  e_table_sum_freq_prop(
+    var_names = "dx_current"
+  ) %>%
+  dplyr::mutate(
+    label = paste0("N=", n)
+  )
+
+plot.alb <- plot.alb + geom_text(data = tab_n, aes(x = dx_current, y = -Inf, label = label), vjust = -1, colour = "gray25")
+
+# print(plot.alb)
+
+
+p_list <- list()
+p_list[[1]] <- plot.perms
+p_list[[2]] <- plot.alb
+p_list[[3]] <- plot.mri
+
+
+
+p_arranged <-
+  cowplot::plot_grid(
+    plotlist = p_list
+  , nrow = 1
+  , ncol = NULL
+  , labels = LETTERS[1:3]
+  , rel_widths = c(1.5, 1, 1)
+  )
+p_arranged %>% print()
+
+
+# write to pdf or other image format
+ggsave(
+    "out_new/Fig1_plot_MRI-BBB_Alb_scatterplots_anova.png"
+  , plot   = p_arranged
+  , width  = 8
+  , height = 4
+  ## png, jpeg
+  , dpi    = 300
+  , bg     = "white"
+  ## pdf
+  #, units  = "in"
+  #, useDingbats = FALSE  # https://stackoverflow.com/questions/9992275/ggplot2-pdf-import-in-adobe-illustrator-missing-font-adobepistd
+  )
+ggsave(
+    "out_new/Fig1_plot_MRI-BBB_Alb_scatterplots_anova.pdf"
+  , plot   = p_arranged
+  , width  = 8
+  , height = 4
+  ## png, jpeg
+  #, dpi    = 300
+  #, bg     = "white"
+  ## pdf
+  , units  = "in"
+  , useDingbats = FALSE  # https://stackoverflow.com/questions/9992275/ggplot2-pdf-import-in-adobe-illustrator-missing-font-adobepistd
+  )
+```
+
+
+### Figure 2
+
+A. Model summary of p-values
+B. Alb vs MMP-10
+C. Alb vs MMP-2
+D. Perm vs PSMD
+
+```{r chunk-11}
+
+#### Revision 1, Moved up
+## p_list <- list()
+## i_p <- 0
+##
+## i_p <- i_p + 1
+## p_list[[i_p]] <- results$fl_albumin_index_log2$fl_msd_csf_mmp_2   $plot_lm_fit_red_BIC
+## p_list[[i_p]] <- p_list[[i_p]] + theme(legend.position = "bottom") # "none"
+## p_list[[i_p]] <- p_list[[i_p]] + theme(legend.box="vertical", legend.margin=margin())
+##
+## i_p <- i_p + 1
+## p_list[[i_p]] <- results$fl_albumin_index_log2$fl_msd_csf_mmp_3   $plot_lm_fit_red_BIC
+## p_list[[i_p]] <- p_list[[i_p]] + theme(legend.position = "bottom") # "none"
+## p_list[[i_p]] <- p_list[[i_p]] + theme(legend.box="vertical", legend.margin=margin())
+##
+## i_p <- i_p + 1
+## p_list[[i_p]] <- results$fl_albumin_index_log2$fl_msd_csf_mmp_10  $plot_lm_fit_red_BIC
+## p_list[[i_p]] <- p_list[[i_p]] + theme(legend.position = "bottom") # "none"
+## p_list[[i_p]] <- p_list[[i_p]] + theme(legend.box="vertical", legend.margin=margin())
+##
+##
+## # p_arranged <-
+## #   cowplot::plot_grid(
+## #     plotlist = p_list
+## #   , nrow = 1
+## #   , ncol = NULL
+## #   )
+## # p_arranged %>% print()
+## #
+## #
+## #
+## # # write to pdf or other image format
+## # ggsave(
+## #     "plot_scatterplots_model_pred_selected.png"
+## #   , plot   = p_arranged
+## #   , width  = 8
+## #   , height = 4
+## #   ## png, jpeg
+## #   , dpi    = 300
+## #   , bg     = "white"
+## #   ## pdf
+## #   #, units  = "in"
+## #   #, useDingbats = FALSE  # https://stackoverflow.com/questions/9992275/ggplot2-pdf-import-in-adobe-illustrator-missing-font-adobepistd
+## #   )
+##
+##
+##
+## ## Put both plots together in one full-page figure.
+##
+## # p_arranged <-
+## #   cowplot::plot_grid(
+## #     plotlist = p_list
+## #   , nrow = NULL
+## #   , ncol = 1
+## #   , labels = LETTERS[1:length(p_list) + 1]
+## #   )
+##
+## p_alb_mriperm_coef_pval <- p_alb_mriperm_coef_pval + theme(legend.position = "bottom") # "none"
+## p_alb_mriperm_coef_pval <- p_alb_mriperm_coef_pval + theme(legend.key.height = unit(0.2, "in"), legend.key.width = unit(0.4, "in"))
+## p_alb_mriperm_coef_pval
+##
+## # p_arranged2 <-
+## #   cowplot::plot_grid(
+## #     plotlist = list(p_alb_mriperm_coef_pval, p_arranged)
+## #   , nrow = 1
+## #   , ncol = NULL
+## #   , labels = c(LETTERS[1], NA)
+## #   , rel_widths = c(2, 1)
+## #   )
+## # #p_arranged2 %>% print()
+## #
+## # # write to pdf or other image format
+## # ggsave(
+## #     "Fig2_plot_coef_pval_with_scatterplots.png"
+## #   , plot   = p_arranged2
+## #   , width  = 8
+## #   , height = 8
+## #   ## png, jpeg
+## #   , dpi    = 300
+## #   , bg     = "white"
+## #   ## pdf
+## #   #, units  = "in"
+## #   #, useDingbats = FALSE  # https://stackoverflow.com/questions/9992275/ggplot2-pdf-import-in-adobe-illustrator-missing-font-adobepistd
+## #   )
+## #
+## # ggsave(
+## #     "Fig2_plot_coef_pval_with_scatterplots.pdf"
+## #   , plot   = p_arranged2
+## #   , width  = 8
+## #   , height = 8
+## #   ## png, jpeg
+## #   #, dpi    = 300
+## #   #, bg     = "white"
+## #   ## pdf
+## #   , units  = "in"
+## #   , useDingbats = FALSE  # https://stackoverflow.com/questions/9992275/ggplot2-pdf-import-in-adobe-illustrator-missing-font-adobepistd
+## #   )
+##
+## ggsave(
+##     "Fig2_plot_coef_pval.png"
+##   , plot   = p_alb_mriperm_coef_pval
+##   , width  = 5
+##   , height = 8
+##   ## png, jpeg
+##   , dpi    = 300
+##   , bg     = "white"
+##   ## pdf
+##   #, units  = "in"
+##   #, useDingbats = FALSE  # https://stackoverflow.com/questions/9992275/ggplot2-pdf-import-in-adobe-illustrator-missing-font-adobepistd
+##   )
+##
+## ggsave(
+##     "Fig2_plot_coef_pval.pdf"
+##   , plot   = p_alb_mriperm_coef_pval
+##   , width  = 5
+##   , height = 8
+##   ## png, jpeg
+##   #, dpi    = 300
+##   #, bg     = "white"
+##   ## pdf
+##   , units  = "in"
+##   , useDingbats = FALSE  # https://stackoverflow.com/questions/9992275/ggplot2-pdf-import-in-adobe-illustrator-missing-font-adobepistd
+##   )
+
+```
+
+
+### Figure 3
+
+```{r chunk-12}
+
+p_list <- list()
+i_p <- 0
+
+i_p <- i_p + 1
+p_list[[i_p]] <- results$fl_albumin_index_log2$fl_msd_csf_mmp_2   $plot_lm_fit_red_BIC
+p_list[[i_p]] <- p_list[[i_p]] + theme(legend.position = "bottom") # "none"
+p_list[[i_p]] <- p_list[[i_p]] + theme(legend.box="vertical", legend.margin=margin())
+
+i_p <- i_p + 1
+p_list[[i_p]] <- results$fl_albumin_index_log2$fl_msd_csf_mmp_3   $plot_lm_fit_red_BIC
+p_list[[i_p]] <- p_list[[i_p]] + theme(legend.position = "bottom") # "none"
+p_list[[i_p]] <- p_list[[i_p]] + theme(legend.box="vertical", legend.margin=margin())
+
+i_p <- i_p + 1
+p_list[[i_p]] <- results$fl_albumin_index_log2$fl_msd_csf_mmp_10  $plot_lm_fit_red_BIC
+p_list[[i_p]] <- p_list[[i_p]] + theme(legend.position = "bottom") # "none"
+p_list[[i_p]] <- p_list[[i_p]] + theme(legend.box="vertical", legend.margin=margin())
+
+i_p <- i_p + 1
+p_list[[i_p]] <- results$fl_albumin_index_log2$fl_cyto_csf_il_4$plot_lm_fit_red_BIC
+p_list[[i_p]] <- p_list[[i_p]] + theme(legend.position = "bottom") # "none"
+p_list[[i_p]] <- p_list[[i_p]] + theme(legend.box="vertical", legend.margin=margin())
+
+i_p <- i_p + 1
+p_list[[i_p]] <- results$fl_albumin_index_log2$fl_cyto_csf_il_6$plot_lm_fit_red_BIC
+p_list[[i_p]] <- p_list[[i_p]] + theme(legend.position = "bottom") # "none"
+p_list[[i_p]] <- p_list[[i_p]] + theme(legend.box="vertical", legend.margin=margin())
+
+i_p <- i_p + 1
+p_list[[i_p]] <- results$fl_albumin_index_log2$fl_cyto_csf_il_8$plot_lm_fit_red_BIC
+p_list[[i_p]] <- p_list[[i_p]] + theme(legend.position = "bottom") # "none"
+p_list[[i_p]] <- p_list[[i_p]] + theme(legend.box="vertical", legend.margin=margin())
+
+i_p <- i_p + 1
+p_list[[i_p]] <- results$fl_albumin_index_log2$fl_cyto_csf_tnf_a$plot_lm_fit_red_BIC
+p_list[[i_p]] <- p_list[[i_p]] + theme(legend.position = "bottom") # "none"
+p_list[[i_p]] <- p_list[[i_p]] + theme(legend.box="vertical", legend.margin=margin())
+
+i_p <- i_p + 1
+p_list[[i_p]] <- results$fl_albumin_index_log2$fl_angio_csf_plgf$plot_lm_fit_red_BIC
+p_list[[i_p]] <- p_list[[i_p]] + theme(legend.position = "bottom") # "none"
+p_list[[i_p]] <- p_list[[i_p]] + theme(legend.box="vertical", legend.margin=margin())
+
+i_p <- i_p + 1
+p_list[[i_p]] <- results$fl_albumin_index_log2$fl_angio_csf_vegf_c$plot_lm_fit_red_BIC
+p_list[[i_p]] <- p_list[[i_p]] + theme(legend.position = "bottom") # "none"
+p_list[[i_p]] <- p_list[[i_p]] + theme(legend.box="vertical", legend.margin=margin())
+
+
+
+p_arranged <-
+  cowplot::plot_grid(
+    plotlist = p_list
+  , nrow = 3
+  , ncol = NULL
+  , labels = LETTERS[1:length(p_list)]
+  #, align = c("none", "h", "v", "hv")[4]
+  )
+p_arranged %>% print()
+
+
+# write to pdf or other image format
+ggsave(
+    "out_new/Fig3_plot_scatterplots_model_pred_cyto_angio.png"
+  , plot   = p_arranged
+  , width  = 8
+  , height = 7
+  ## png, jpeg
+  , dpi    = 300
+  , bg     = "white"
+  ## pdf
+  #, units  = "in"
+  #, useDingbats = FALSE  # https://stackoverflow.com/questions/9992275/ggplot2-pdf-import-in-adobe-illustrator-missing-font-adobepistd
+  )
+
+# write to pdf or other image format
+ggsave(
+    "out_new/Fig3_plot_scatterplots_model_pred_cyto_angio.pdf"
+  , plot   = p_arranged
+  , width  = 8
+  , height = 7
+  ## png, jpeg
+  #, dpi    = 300
+  #, bg     = "white"
+  ## pdf
+  , units  = "in"
+  , useDingbats = FALSE  # https://stackoverflow.com/questions/9992275/ggplot2-pdf-import-in-adobe-illustrator-missing-font-adobepistd
+  )
+
+```
+
+### Figure 4
+
+```{r chunk-13}
+
+p_list <- list()
+i_p <- 0
+
+i_p <- i_p + 1
+p_list[[i_p]] <- results$mri_perm_3t_tot $mri_dti_freewater_mean$plot_lm_fit_red_BIC
+p_list[[i_p]] <- p_list[[i_p]] + theme(legend.position = "bottom") # "none"
+p_list[[i_p]] <- p_list[[i_p]] + theme(legend.box="vertical", legend.margin=margin())
+#p_list[[i_p]] <- p_list[[i_p]] + ylab("Total MRI Permeability       ")
+p_list[[i_p]]
+
+i_p <- i_p + 1
+p_list[[i_p]] <- results$mri_perm_3t_tot $mri_dti_psmd       $plot_lm_fit_red_BIC
+p_list[[i_p]] <- p_list[[i_p]] + theme(legend.position = "bottom") # "none"
+p_list[[i_p]] <- p_list[[i_p]] + theme(legend.box="vertical", legend.margin=margin())
+
+i_p <- i_p + 1
+p_list[[i_p]] <- results$mri_perm_3t_tot $percent_wmhv       $plot_lm_fit_red_BIC
+p_list[[i_p]] <- p_list[[i_p]] + theme(legend.position = "bottom") # "none"
+p_list[[i_p]] <- p_list[[i_p]] + theme(legend.box="vertical", legend.margin=margin())
+
+p_arranged <-
+  cowplot::plot_grid(
+    plotlist = p_list
+  , nrow = 1
+  , ncol = NULL
+  , labels = LETTERS[1:length(p_list)]
+  #, align = c("none", "h", "v", "hv")[4]
+  )
+p_arranged %>% print()
+
+
+# write to pdf or other image format
+ggsave(
+    "out_new/Fig4_plot_scatterplots_model_pred_perm.png"
+  , plot   = p_arranged
+  , width  = 8
+  , height = 7/3
+  ## png, jpeg
+  , dpi    = 300
+  , bg     = "white"
+  ## pdf
+  #, units  = "in"
+  #, useDingbats = FALSE  # https://stackoverflow.com/questions/9992275/ggplot2-pdf-import-in-adobe-illustrator-missing-font-adobepistd
+  )
+
+# write to pdf or other image format
+ggsave(
+    "out_new/Fig4_plot_scatterplots_model_pred_perm.pdf"
+  , plot   = p_arranged
+  , width  = 8
+  , height = 7/3
+  ## png, jpeg
+  #, dpi    = 300
+  #, bg     = "white"
+  ## pdf
+  , units  = "in"
+  , useDingbats = FALSE  # https://stackoverflow.com/questions/9992275/ggplot2-pdf-import-in-adobe-illustrator-missing-font-adobepistd
+  )
+
+```
+
+
+## Tables
+
+### Table 1, demographics
+
+```{r chunk-14}
+# install.packages("moonbook")
+
+# specify tows to summarize and columns to summarize by
+list_var_col_names <-
+  c("dx_current")
+list_var_row_names <-
+  c(
+    "age"
+  , "sex"
+  , "demo_edu_yrs"
+  , "fl_albumin_index_log2"
+  , "mri_perm_3t_tot"
+  )
+
+# label variables
+list_var_col_labels <- labelled::var_label(dat_sheet[, list_var_col_names]) %>% unlist()
+list_var_row_labels <- labelled::var_label(dat_sheet[, list_var_row_names]) %>% unlist()
+
+# This loop creates a table summarized by each variable,
+#   but can also specify multiple columns to summarize conditional on multiple columns.
+for (i_col in seq_along(list_var_col_names)) {
+
+  # filename root for each separate variable (will write, then read to compile into one)
+  fn_root <- paste0("out_new/tab1_vars_", list_var_col_names[i_col], "_summary")
+
+  # run function (additional options are available)
+  e_table1_summaries(
+      dat_tab1           = dat_sheet_demo
+    , list_var_col_names = list_var_col_names[i_col]
+    , list_var_col_labels = list_var_col_labels[i_col]
+    , list_var_row_names = list_var_row_names
+    , list_var_row_labels = list_var_row_labels
+    , fn_root            = fn_root
+    , sw_verbose         = TRUE
+    )
+
+  # read final table
+  tab1_temp <- utils::read.csv(paste0(fn_root, "_", "all", ".csv"))
+  # display in Rmd file
+  knitr::kable(tab1_temp)
+}
+
+## For totals, helpful when missing data because has sample size for each row.
+# filename root for each separate variable (will write, then read to compile into one)
+fn_root <- paste0("out_new/tab1_vars_", "total", "_summary")
+
+# run function (additional options are available)
+e_table1_summaries(
+    dat_tab1           = dat_sheet_demo
+  , list_var_col_names = NULL
+  , list_var_col_labels = "Total"
+  , list_var_row_names = list_var_row_names
+  , list_var_row_labels = list_var_row_labels
+  , fn_root            = fn_root
+  , sw_verbose         = TRUE
+  )
+
+# read final table
+tab1_temp <- utils::read.csv(paste0(fn_root, "_", "all", ".csv"))
+# display in Rmd file
+knitr::kable(tab1_temp)
+```
+
+### Table 2, sample size by biomarker and dx
+
+```{r}
+#select columns & replace values with logical
+data_table <- dat_sheet %>% select(-ptid,-age,-sex,-demo_edu_yrs)
+data_table <- as.data.frame(!is.na(data_table))
+
+#restore dx
+data_table$dx_current <- dat_sheet$dx_current
+
+for (i_response in seq_along(list_var_resp)) {
+  for (i_marker in seq_along(list_var_covar)) {
+    #i_marker = 1
+    #i_response = 1
+
+    #frequency table
+    n_marker <- list_var_covar[i_marker]
+    n_response <- list_var_resp[i_response]
+    count <- e_table_sum_freq_prop(data_table,var_names=c(n_response,n_marker,"dx_current"))
+
+    #extract cases where both covar & response exist
+    count <- count %>% filter(count[ ,1] == TRUE & count[ ,2]== TRUE)
+
+    #replace "true" with variable name & headers w/ headers wanted for final table
+    count[ ,1] <- n_response
+    count[ ,2] <- n_marker
+    colnames(count)[colnames(count)==n_response]<-"Response"
+    colnames(count)[colnames(count)==n_marker]<-"Biomarker"
+
+    #bind
+    if (i_marker==1 & i_response==1) {
+      tab_sample_size <- count
+    } else {
+      tab_sample_size <- rbind(tab_sample_size,count)
+    }
+  }
+}
+
+tab_sample_size <- tab_sample_size %>% select(-prop)
+
+tab_sample_size <- pivot_wider(tab_sample_size,names_from = dx_current, values_from = n)
+
+tab_sample_size %>% print()
+
+write_csv(tab_sample_size,"out_new/biomarker_frequency_by_dx.csv")
+```
+
+### Table 3, regression coefficients with 95% CIs
+
+```{r}
+n_sig <- 3
+
+names_var_resp <-
+  c("fl_albumin_index_log2", "mri_perm_3t_tot")
+
+all_summary <- list()
+i_list <- 0
+
+for (i_resp in seq_along(names_var_resp)) {
+  ## i_resp = 1
+  for (i_covar in seq_along(n_row)) {
+    ## i_covar = 20
+
+    var_row  <- n_row[i_covar]
+    var_col <- names_var_resp[i_resp]
+
+    #exists <- results[[var_col]][[var_row]]
+    #if(is.null(exists)) next
+
+    i_list <- i_list + 1
+    all_summary[[i_list]] <-
+      modelsummary::modelsummary(
+        models    = results[[var_col]][[var_row]][["lm_fit_red_BIC"]]
+      , output    = "data.frame"
+      , estimate  = "{estimate} [{conf.low}, {conf.high}]"
+      , fmt       = n_sig #list("estimate" = n_sig, "std.error" = n_sig)
+      , statistic = NULL # "conf.int"
+      , conf_level = 0.95
+      , shape     = term ~ model + statistic
+      ) %>%
+      dplyr::filter(
+        (part == "estimates") | (term == "R2") | (term == "Num.Obs.")
+      ) %>%
+      dplyr::mutate(
+        Y_var = var_col
+      , X_var = var_row
+      ) %>%
+      dplyr::select(
+        -part
+      ) %>%
+      dplyr::select(
+        Y_var, X_var, tidyselect::everything()
+      )
+
+    # Gender:X interaction, report Male/Female slopes with 95% CI
+    if (any(names(coef(results[[var_col]][[var_row]][["lm_fit_red_BIC"]])) == "sexMale:X")) {
+
+      out_contrast <-
+        e_plot_model_contrasts(
+          fit                     = results[[var_col]][[var_row]][["lm_fit_red_BIC"]]
+        , dat_cont                = results[[var_col]][[var_row]][["dat_lm"]]
+        , adjust_method           = c("none", "tukey", "scheffe", "sidak", "bonferroni", "dunnettx", "mvt")[1]  # see ?emmeans::summary.emmGrid
+        , CI_level                = 0.95
+        , sw_print                = FALSE
+        )
+
+      out_contrast$text$`sex:X`[[2]][[1]][1]
+      out_contrast$text$`sex:X`[[2]][[1]][2]
+
+      tab_est <- out_contrast$tables$`sex:X`$est %>% tibble::as_tibble()
+      tab_est$X.trend
+
+
+      all_summary[[i_list]] <-
+        all_summary[[i_list]] %>%
+        dplyr::bind_rows(
+          tibble::tibble(
+            Y_var = all_summary[[i_list]][[ "Y_var" ]][1]
+          , X_var = all_summary[[i_list]][[ "X_var" ]][1]
+          , term =
+              paste0(tab_est$sex, " slope")
+          , `Model 1 / Est.` =
+              paste0(
+                tab_est$X.trend  %>% round(n_sig)
+              , " ["
+              , tab_est$lower.CL %>% round(n_sig)
+              , ", "
+              , tab_est$upper.CL %>% round(n_sig)
+              , "]"
+              )
+          )
+        )
+
+    }
+
+  } # i_covar
+} # i_resp
+
+all_summary <-
+  all_summary %>%
+  dplyr::bind_rows()
+
+all_summary_wide <-
+  all_summary %>%
+  tidyr::pivot_wider(
+    id_cols     = c(Y_var, X_var)
+  , names_from  = term
+  #, values_from = `Model 1 / Est.`
+  , values_from = `(1) / Est.`
+  )
+
+# replace unicode
+
+names_col <-
+  colnames(all_summary_wide)
+
+names_col <-
+  e_text_unicode_to_ascii(
+    text_in = names_col
+  ) %>%
+  stringr::str_replace(
+    pattern     = stringr::fixed(" * ")
+  , replacement = ":"
+  ) %>%
+  stringr::str_replace(
+    pattern     = stringr::fixed("(Intercept)")
+  , replacement = "Intercept"
+  ) %>%
+  stringr::str_replace(
+    pattern     = "sexMale"
+  , replacement = "sex"
+  )
+
+for (i_row in seq_len(nrow(dat_var_label_matching))) {
+  names_col <-
+    names_col %>%
+    stringr::str_replace(
+      pattern     = stringr::fixed(dat_var_label_matching[i_row, "Var"] %>% as.character())
+    , replacement = dat_var_label_matching[i_row, "Label"] %>% as.character()
+    )
+  all_summary_wide[[ "Y_var" ]] <-
+    all_summary_wide[[ "Y_var" ]] %>%
+    stringr::str_replace(
+      pattern     = stringr::fixed(dat_var_label_matching[i_row, "Var"] %>% as.character())
+    , replacement = dat_var_label_matching[i_row, "Label"] %>% as.character()
+    )
+}
+
+colnames(all_summary_wide) <-
+  names_col
+
+all_summary_wide <-
+  all_summary_wide %>%
+  dplyr::left_join(
+    dat_var_label_matching
+  , by = c("X_var" = "Var")
+  ) %>%
+  dplyr::select(
+    -X_var
+  ) %>%
+  dplyr::rename(
+    `X variable` = Label
+  , `Response variable` = Y_var
+  , n = `Num.Obs.`
+  ) %>%
+  dplyr::select(
+    `Response variable`
+  , `X variable`
+  , Type
+  , n
+  , R2
+  , Intercept
+  , Age
+  , Gender
+  , X
+  , `Age:X`
+  , `Gender:X`
+  , `Female slope`
+  , `Male slope`
+  ) %>%
+  dplyr::arrange(
+    `Response variable`
+  , Type
+  , `X variable`
+  )
+
+all_summary_wide %>% print(n=Inf)
+
+readr::write_csv(
+    all_summary_wide
+  , file = "out_new/Table_2_model_coef_CI.csv"
+  , na = ""
+  )
+```
+

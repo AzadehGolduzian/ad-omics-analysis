@@ -1,0 +1,2799 @@
+---
+title: "Multivariate_analysis_groups"
+author: "Azadeh"
+format: html
+editor: visual
+---
+
+![]()
+
+```{r}
+# remotes::install_github("erikerhardt/erikmisc")
+
+library(ggplot2)
+library(dplyr)
+library(tidyr)
+library(car)
+library(broom)
+library(emmeans)
+library(pROC)
+library(rlang)
+library(patchwork)
+library(erikmisc)
+```
+
+#load data
+
+```{r}
+
+load("dat_sub_Data_inflammation_analysis_paper_06052025.RData")
+load("dat_sub_and_Var_for_inflammation_analysis.RData")
+#hist(dat_all_combine$mri_perm_3t_tot |> e_log_shift(min_add = 0.1))
+#hist(dat_all_combine$mri_perm_3t_tot_log2)
+
+# update log2 variable using different offset from 0
+dat_sub$mri_perm_3t_tot_log2 <- 
+  dat_sub$mri_perm_3t_tot |> 
+  e_log_shift(min_add = 0.1)
+
+```
+
+# create the dat_sheet with scaling fixed
+```{r}
+# This code does provide zscale Y or responses
+dat_sheet <-
+  #dat_sheet %>%
+  dat_sub %>%
+  dplyr::mutate(
+    # to allow log transformation when wmhv==0
+  #  percent_wmhv  = percent_wmhv + 0.00001
+  #  fl_cyto_csf_il_4 = ifelse(fl_cyto_csf_il_4 == 0.001, NA, fl_cyto_csf_il_4)
+  #  across(tidyselect::all_of(c(Var$csf, Var$plasma, Var$mri)), e_log_shift, min_add = 1, base_log = 2)
+    across(tidyselect::all_of(c(Var$csf, Var$plasma, Var$mri)), scale)
+  , across(tidyselect::all_of(c(Var$csf, Var$plasma, Var$mri)), as.numeric)
+  )
+```
+
+# For this code we use the plot that we created for univariate model 
+# for Panel A ; response MrI 3T ~ AD Group 
+```{r}
+
+# Define variables
+CSF_AD <- c("fl_abeta_4240_ratio_log2", "fl_csf__ALL__ptau_log2")
+vars_to_analyze <- c("mri_perm_3t_tot", CSF_AD) |> unique()
+
+
+
+# Filter complete cases
+dat_model <- dat_sheet[, vars_to_analyze] |> na.omit()
+
+# # Plotting bug in function bug in the function,. It assumes some missingness will always be present, but throws an error if there’s none.
+# result_csf_AD <- e_plot_complete_by_variable_subset(
+#   dat = dat_model,
+#   var_list = vars_to_analyze,
+#   var_resp = "mri_perm_3t_tot",
+#   sw_plot_complete = 10 
+# )
+
+# Modeling
+formula_full <- as.formula(paste0(
+  "mri_perm_3t_tot ~ (", paste(CSF_AD, collapse = " + "), ")^2"
+))
+
+fit_full <- lm(formula_full, data = dat_model)
+
+fit_selected <- step(
+  fit_full,
+  direction = "both",
+  trace = 0,
+  k = log(nrow(dat_model))
+)
+
+summary(fit_full)
+summary(fit_selected)
+
+```
+
+# for Panel A ; response MrI 3T ~ Angio
+
+```{r}
+
+  Angio_csf <-  c("fl_angio_csf_bfgf_log2"               
+  , "fl_angio_csf_flt_1_log2"               
+  , "fl_angio_csf_tie2_log2"                
+  , "fl_angio_csf_vegf_a_log2"              
+  , "fl_angio_csf_vegf_c_log2"              
+  , "fl_angio_csf_vegf_d_log2" )
+
+
+vars_to_analyze <- c("mri_perm_3t_tot", Angio_csf) |> unique()
+
+# # Plotting bug in function bug in the function,. It assumes some missingness will always be present, but throws an error if there’s none.
+result_csf_AD <- e_plot_complete_by_variable_subset(
+  dat = dat_sheet,
+  var_list = vars_to_analyze,
+  var_resp = "mri_perm_3t_tot",
+  sw_plot_complete = 10
+)
+
+# Modeling
+formula_full <- as.formula(paste0(
+  "mri_perm_3t_tot ~ (", paste(Angio_csf, collapse = " + "), ")^2"
+))
+
+fit_full <- lm(formula_full, data = dat_sheet)
+
+fit_selected <- step(
+  fit_full,
+  direction = "both",
+  trace = 0,
+  k = log(nrow(dat_model))
+)
+
+summary(fit_full)
+summary(fit_selected)
+
+
+```
+
+#for Panel A ; response MrI 3T ~ Cytokins
+
+```{r}
+
+  cyto_csf <-  c( 
+    "fl_cyto_csf_ifn_g_log2"                
+  , "fl_csf__ALL__il_1b_log2"              
+  , "fl_cyto_csf_il_2_log2"                
+  , "fl_cyto_csf_il_4_log2"        
+  , "fl_cyto_csf_il_6_log2"                 
+  , "fl_cyto_csf_il_8_log2"     
+  , "fl_cyto_csf_il_10_log2"                
+  , "fl_cyto_csf_il_12p70_log2"           
+  , "fl_cyto_csf_il_13_log2"                
+  , "fl_cyto_csf_tnf_a_log2" )
+
+
+vars_to_analyze <- c("mri_perm_3t_tot", cyto_csf) |> unique()
+
+# # Plotting bug in function bug in the function,. It assumes some missingness will always be present, but throws an error if there’s none.
+result_csf_cyto <- e_plot_complete_by_variable_subset(
+  dat = dat_sheet,
+  var_list = vars_to_analyze,
+  var_resp = "mri_perm_3t_tot",
+  sw_plot_complete = 10
+)
+
+
+
+# Extract the best subset (row 2 with 113 observations and 4 plasma variables)
+best_subset_vars <- result_csf_cyto$var_names[[9]]  # Row 5 from results
+cat("Using subset with", result_plasma$n_complete[9], "complete observations\n")
+cat("Variables:", paste(best_subset_vars, collapse = ", "), "\n\n")
+
+# Create dataset with complete cases for this subset
+dat_complete <- dat_sheet |> 
+  select(all_of(best_subset_vars)) |> 
+  filter(complete.cases(pick(everything())))
+
+# ============================================
+# STEP 2: Variable importance with Random Forest
+# ============================================
+
+# Remove response from predictor list
+predictors <- setdiff(best_subset_vars, "mri_perm_3t_tot")
+
+# Run Random Forest
+set.seed(123)
+rf_model <- randomForest(
+  mri_perm_3t_tot ~ .,
+  data = dat_complete,
+  ntree = 500,
+  importance = TRUE
+)
+
+# Get variable importance
+var_imp <- importance(rf_model)
+var_imp_df <- data.frame(
+  variable = rownames(var_imp),
+  importance = var_imp[, "%IncMSE"]
+) |> 
+  arrange(desc(importance))
+
+cat("Variable Importance from Random Forest:\n")
+print(var_imp_df)
+
+# ============================================
+# STEP 3: Build linear model with top variables
+# ============================================
+top_vars <- var_imp_df$variable[1:5]
+
+
+
+# Modeling
+formula_full <- as.formula(paste0(
+  "mri_perm_3t_tot ~ (", paste(top_vars, collapse = " + "), ")^2"
+))
+
+fit_full <- lm(formula_full, data = dat_complete)
+
+fit_selected <- step(
+  fit_full,
+  direction = "both",
+  trace = 0,
+  k = log(nrow(dat_model))
+)
+
+summary(fit_full)
+summary(fit_selected)
+
+e_plot_lm_diagnostics(fit_full, sw_plot_set = c(NA, "simple", "simpleAV", "all")[2])
+e_plot_lm_diagnostics(fit_selected, sw_plot_set = c(NA, "simple", "simpleAV", "all")[2])
+
+```
+
+#for Panel A ; response MrI 3T ~ MMP
+
+```{r}
+
+  MMP_csf <-  c(
+    "fl_plasma__ALL__mmp_1_log2",
+    "fl_plasma__ALL__mmp_2_log2",
+    "fl_plasma__ALL__mmp_3_log2",
+    "fl_plasma__ALL__mmp_9_log2",
+    "fl_plasma__ALL__mmp_10_log2" 
+    
+  )
+
+
+vars_to_analyze <- c("mri_perm_3t_tot", MMP_csf) |> unique()
+
+# # Plotting bug in function bug in the function,. It assumes some missingness will always be present, but throws an error if there’s none.
+result_csf_AD <- e_plot_complete_by_variable_subset(
+  dat = dat_sheet,
+  var_list = vars_to_analyze,
+  var_resp = "mri_perm_3t_tot",
+  sw_plot_complete = 10
+)
+
+# Modeling
+formula_full <- as.formula(paste0(
+  "mri_perm_3t_tot ~ (", paste(MMP_csf, collapse = " + "), ")^2"
+))
+
+fit_full <- lm(formula_full, data = dat_sheet)
+
+fit_selected <- step(
+  fit_full,
+  direction = "both",
+  trace = 0,
+  k = log(nrow(dat_model))
+)
+
+summary(fit_full)
+summary(fit_selected)
+```
+
+#for Panel A ; response MrI 3T ~ OTHER
+
+```{r}
+
+other_csf <-  c(
+ "fl_csf__ALL__gfap_log2" ,
+ "fl_csf_igg_log2" ,
+ "fl_igg_index_log2"    ,
+ "fl_myelin_basic_protein_log2",
+ "fl_csf__ALL__nfl_log2" ,
+ "fl_csf__ALL__plgf_log2" 
+    
+  )
+
+
+vars_to_analyze <- c("mri_perm_3t_tot", other_csf) |> unique()
+
+# # Plotting bug in function bug in the function,. It assumes some missingness will always be present, but throws an error if there’s none.
+result_csf_other <- e_plot_complete_by_variable_subset(
+  dat = dat_sheet,
+  var_list = vars_to_analyze,
+  var_resp = "mri_perm_3t_tot",
+  sw_plot_complete = 10
+)
+
+# Modeling
+formula_full <- as.formula(paste0(
+  "mri_perm_3t_tot ~ (", paste(other_csf, collapse = " + "), ")^2"
+))
+
+fit_full <- lm(formula_full, data = dat_sheet)
+
+fit_selected <- step(
+  fit_full,
+  direction = "both",
+  trace = 0,
+  k = log(nrow(dat_model))
+)
+
+summary(fit_full)
+summary(fit_selected)
+
+
+```
+
+#for Panel A ; response MrI 3T ~ MRI
+
+```{r}
+
+MRI_csf <-  c(
+  "mri_percent_vol_hippo" ,
+  "mri_mean_cort_thick_mm" ,
+  "mri_dti_psmd"    ,
+  "mri_dti_freewater_mean" 
+    
+  )
+
+
+vars_to_analyze <- c("mri_perm_3t_tot", MRI_csf) |> unique()
+
+# # Plotting bug in function bug in the function,. It assumes some missingness will always be present, but throws an error if there’s none.
+result_csf_mri <- e_plot_complete_by_variable_subset(
+  dat = dat_sheet,
+  var_list = vars_to_analyze,
+  var_resp = "mri_perm_3t_tot",
+  sw_plot_complete = 10
+)
+
+# Modeling
+formula_full <- as.formula(paste0(
+  "mri_perm_3t_tot ~ (", paste(MRI_csf, collapse = " + "), ")^2"
+))
+
+fit_full <- lm(formula_full, data = dat_sheet)
+
+fit_selected <- step(
+  fit_full,
+  direction = "both",
+  trace = 0,
+  k = log(nrow(dat_model))
+)
+
+summary(fit_full)
+summary(fit_selected)
+
+
+```
+
+#for Panel A ; Albumin ~ AD 
+
+```{r}
+AD_csf <-  c(
+  "fl_abeta_4240_ratio_log2",
+  "fl_csf__ALL__ptau_log2"
+    
+  )
+
+
+vars_to_analyze <- c("fl_albumin_index_log2", AD_csf) |> unique()
+
+# # Plotting bug in function bug in the function,. It assumes some missingness will always be present, but throws an error if there’s none.
+result_csf_mri <- e_plot_complete_by_variable_subset(
+  dat = dat_sheet,
+  var_list = vars_to_analyze,
+  var_resp = "fl_albumin_index_log2",
+  sw_plot_complete = 10
+)
+
+# Modeling
+formula_full <- as.formula(paste0(
+  "fl_albumin_index_log2 ~ (", paste(AD_csf, collapse = " + "), ")^2"
+))
+
+fit_full <- lm(formula_full, data = dat_sheet)
+
+fit_selected <- step(
+  fit_full,
+  direction = "both",
+  trace = 0,
+  k = log(nrow(dat_model))
+)
+
+summary(fit_full)
+summary(fit_selected)
+
+
+```
+
+
+
+Now this section focuses only on the variables that were significant in the univariate models, based on the results we observed in the plots.
+
+# 3T VS all CSF Significant
+
+```{r}
+
+CSF_Vars_Sign <-  c( 
+  
+    "fl_csf__ALL__il_1b_log2"         
+  , "mri_dti_freewater_mean" 
+  ,  "mri_dti_psmd"
+  )
+
+
+vars_to_analyze <- c("mri_perm_3t_tot_log2", CSF_Vars_Sign) |> unique()
+
+
+
+# Modeling
+formula_full <- as.formula(paste0(
+  "mri_perm_3t_tot_log2 ~ (", paste(CSF_Vars_Sign, collapse = " + "), ")^2"
+))
+
+fit_full <- lm(formula_full, data = dat_sheet)
+
+fit_selected <- step(
+  fit_full,
+  direction = "both",
+  trace = 0,
+  k = log(nrow(dat_model))
+)
+
+summary(fit_full)
+summary(fit_selected)
+
+e_plot_lm_diagnostics(fit_full, sw_plot_set = c(NA, "simple", "simpleAV", "all")[2])
+e_plot_lm_diagnostics(fit_selected, sw_plot_set = c(NA, "simple", "simpleAV", "all")[2])
+
+
+```
+
+
+ 3T VS all plasma Significant panel B, now only VEGF A only matter 
+do I need to check that as well? 
+```{r}
+
+plasma_Vars_Sign <-  c( 
+           
+
+  )
+
+
+vars_to_analyze <- c("mri_perm_3t_tot", plasma_Vars_Sign) |> unique()
+
+
+
+# Modeling
+formula_full <- as.formula(paste0(
+  "mri_perm_3t_tot ~ (", paste(plasma_Vars_Sign, collapse = " + "), ")^2"
+))
+
+# Modeling
+mainformula_full <- as.formula(paste0(
+  "mri_perm_3t_tot ~ (", paste(plasma_Vars_Sign, collapse = " + "), ")"
+))
+fit_main <- lm(mainformula_full, data = dat_sheet)
+
+
+fit_full <- lm(formula_full, data = dat_sheet)
+
+fit_selected <- step(
+  fit_full,
+  direction = "both",
+  trace = 0,
+  k = log(nrow(dat_model))
+)
+
+summary(fit_main)
+summary(fit_full)
+summary(fit_selected)
+
+e_plot_lm_diagnostics(fit_full, sw_plot_set = c(NA, "simple", "simpleAV", "all")[2])
+e_plot_lm_diagnostics(fit_selected, sw_plot_set = c(NA, "simple", "simpleAV", "all")[2])
+```
+
+
+
+# Albumin VS All CSF panel A
+
+```{r}
+
+CSF_Vars_Sign <-  c( 
+           
+   "fl_cyto_csf_il_8_log2" ,
+   "fl_cyto_csf_il_6_log2",
+   "fl_msd_csf_mmp_2_log2" ,
+   "fl_msd_csf_mmp_3_log2" ,
+   "fl_csf_igg_log2", 
+   "fl_igg_index_log2" ,
+   "fl_csf__ALL__plgf_log2",
+   "mri_percent_vol_hippo"  
+  , "fl_cyto_csf_il_10_log2"                
+
+  )
+
+
+vars_to_analyze <- c("fl_albumin_index_log2", CSF_Vars_Sign) |> unique()
+
+result_csf <- e_plot_complete_by_variable_subset(
+  dat = dat_sheet,
+  var_list = vars_to_analyze,
+  var_resp = "fl_albumin_index_log2"
+  # sw_plot_complete = 30
+)
+dat_model <- dat_sheet |> tidyr::drop_na(tidyselect::all_of(vars_to_analyze))
+
+# Modeling
+formula_full <- as.formula(paste0(
+  "fl_albumin_index_log2 ~ (", paste(CSF_Vars_Sign, collapse = " + "), ")^2"
+))
+
+fit_full <- lm(formula_full, data = dat_model)
+
+fit_selected <- step(
+  fit_full,
+  direction = "both",
+  trace = 0,
+  k = log(nrow(dat_model))
+)
+
+summary(fit_full)
+summary(fit_selected)
+
+e_plot_lm_diagnostics(fit_full, sw_plot_set = c(NA, "simple", "simpleAV", "all")[2])
+e_plot_lm_diagnostics(fit_selected, sw_plot_set = c(NA, "simple", "simpleAV", "all")[3])
+
+
+# WITHOUT IGG
+
+CSF_Vars_Sign <-  c( 
+           
+   "fl_cyto_csf_il_8_log2" ,
+   "fl_cyto_csf_il_6_log2",
+   "fl_msd_csf_mmp_2_log2" ,
+   "fl_msd_csf_mmp_3_log2" ,
+   # "fl_csf_igg_log2", 
+   # "fl_igg_index_log2" ,
+   "fl_csf__ALL__plgf_log2",
+   "mri_percent_vol_hippo"  
+  , "fl_cyto_csf_il_10_log2"                
+
+  )
+
+
+vars_to_analyze <- c("fl_albumin_index_log2", CSF_Vars_Sign) |> unique()
+
+result_csf <- e_plot_complete_by_variable_subset(
+  dat = dat_sheet,
+  var_list = vars_to_analyze,
+  var_resp = "fl_albumin_index_log2"
+  # sw_plot_complete = 30
+)
+dat_model <- dat_sheet |> tidyr::drop_na(tidyselect::all_of(vars_to_analyze))
+
+# Modeling
+formula_full <- as.formula(paste0(
+  "fl_albumin_index_log2 ~ (", paste(CSF_Vars_Sign, collapse = " + "), ")^2"
+))
+
+fit_full <- lm(formula_full, data = dat_model)
+
+fit_selected <- step(
+  fit_full,
+  direction = "both",
+  trace = 0,
+  k = log(nrow(dat_model))
+)
+
+summary(fit_full)
+summary(fit_selected)
+
+e_plot_lm_diagnostics(fit_full, sw_plot_set = c(NA, "simple", "simpleAV", "all")[2])
+e_plot_lm_diagnostics(fit_selected, sw_plot_set = c(NA, "simple", "simpleAV", "all")[3])
+
+```
+
+# Albumin VS All plasma panel B
+
+```{r}
+
+plasma_Vars_Sign <-  c( 
+           
+ "fl_cyto_heparin_plasma_il_10_log2" ,
+ "fl_serum_igg_log2"
+
+  )
+
+
+vars_to_analyze <- c("fl_albumin_index_log2", plasma_Vars_Sign) |> unique()
+
+result_csf <- e_plot_complete_by_variable_subset(
+  dat = dat_sheet,
+  var_list = vars_to_analyze,
+  var_resp = "fl_albumin_index_log2",
+  sw_plot_complete = 10
+)
+
+# Modeling
+formula_full <- as.formula(paste0(
+  "fl_albumin_index_log2 ~ (", paste(plasma_Vars_Sign, collapse = " + "), ")^2"
+))
+
+fit_full <- lm(formula_full, data = dat_sheet)
+
+fit_selected <- step(
+  fit_full,
+  direction = "both",
+  trace = 0,
+  k = log(nrow(dat_model))
+)
+
+summary(fit_full)
+summary(fit_selected)
+
+e_plot_lm_diagnostics(fit_full, sw_plot_set = c(NA, "simple", "simpleAV", "all")[2])
+e_plot_lm_diagnostics(fit_selected, sw_plot_set = c(NA, "simple", "simpleAV", "all")[2])
+
+
+```
+
+
+#AIC Check only sig one
+
+#1. Start with albumin as response 
+
+1.1 CSF AND MRI AS PREDICTORS 
+
+```{r}
+csf_mri_vars <-  c( 
+           
+   "fl_msd_csf_mmp_2_log2" ,
+   "fl_msd_csf_mmp_3_log2" ,
+   "fl_csf__ALL__plgf_log2",
+   "mri_dti_psmd",
+   "fl_cyto_csf_il_10_log2",
+   "fl_angio_csf_tie2_log2" 
+  )
+
+
+vars_to_analyze <- c("fl_albumin_index_log2", csf_mri_vars) |> unique()
+
+result_csf <- e_plot_complete_by_variable_subset(
+  dat = dat_sheet,
+  var_list = vars_to_analyze,
+  var_resp = "fl_albumin_index_log2"
+  # sw_plot_complete = 30
+)
+dat_model <- dat_sheet |> tidyr::drop_na(tidyselect::all_of(vars_to_analyze))
+
+#RF 
+dat_model <- dat_sheet %>%
+  select(all_of(c("fl_albumin_index_log2", csf_mri_vars))) %>%
+  tidyr::drop_na()
+library(randomForest)
+?randomForest
+# 3. Random Forest
+set.seed(123)
+rf_fit <- randomForest(
+  fl_albumin_index_log2 ~ .,
+  data = dat_model,
+  ntree = 1000,
+  importance = TRUE
+)
+
+# 4. Results
+print(rf_fit)
+varImpPlot(rf_fit)
+importance(rf_fit)
+
+#result: 
+#Call:
+#  randomForest(formula = fl_albumin_index_log2 ~ ., data = dat_model,      ntree = 1000, importance = TRUE) 
+#                Type of random forest: regression
+#                      Number of trees: 1000
+# No. of variables tried at each split: 2
+
+
+# Modeling
+formula_full <- as.formula(paste0(
+  "fl_albumin_index_log2 ~ (", paste(csf_mri_vars, collapse = " + "), ")"
+))
+
+fit_full <- lm(formula_full, data = dat_model)
+
+fit_selected <- step(
+  fit_full,
+  direction = "both",
+  trace = 0,
+  k = log(nrow(dat_model))
+)
+
+summary(fit_full)
+summary(fit_selected)
+
+e_plot_lm_diagnostics(fit_full, sw_plot_set = c(NA, "simple", "simpleAV", "all")[2])
+e_plot_lm_diagnostics(fit_selected, sw_plot_set = c(NA, "simple", "simpleAV", "all")[3])
+
+
+```
+
+1.2 All Plasma now 
+```{r}
+plasma_vars <-  c( 
+  "fl_plasma__ALL__vegf_d_log2",
+  "fl_plasma__ALL__il_1b_log2",
+  "fl_cyto_heparin_plasma_il_10_log2",
+  "fl_serum_igg_log2" ,
+  "fl_plasma__ALL__abeta_42_log2"
+
+  )
+
+
+vars_to_analyze <- c("fl_albumin_index_log2", plasma_vars) |> unique()
+
+result_plasma <- e_plot_complete_by_variable_subset(
+  dat = dat_sheet,
+  var_list = vars_to_analyze,
+  var_resp = "fl_albumin_index_log2"
+  # sw_plot_complete = 30
+)
+dat_model <- dat_sheet |> tidyr::drop_na(tidyselect::all_of(vars_to_analyze))
+
+#RF 
+dat_model <- dat_sheet %>%
+  select(all_of(c("fl_albumin_index_log2", plasma_vars))) %>%
+  tidyr::drop_na()
+
+library(randomForest)
+# 3. Random Forest
+set.seed(123)
+rf_fit <- randomForest(
+  fl_albumin_index_log2 ~ .,
+  data = dat_model,
+  ntree = 1000,
+  importance = TRUE
+)
+
+# 4. Results
+print(rf_fit)
+varImpPlot(rf_fit)
+importance(rf_fit)
+
+# with imputation 
+
+
+# 1. Check for problematic rows
+dat_for_impute <- dat_sheet %>%
+  select(all_of(c("fl_albumin_index_log2", plasma_vars)))
+
+# Remove rows where ALL values are missing
+dat_for_impute <- dat_for_impute %>%
+  filter(rowSums(!is.na(.)) > 0)
+
+# Check column types
+sapply(dat_for_impute, class)
+
+# Force numeric
+dat_for_impute <- dat_for_impute %>%
+  mutate(across(everything(), ~as.numeric(as.character(.))))
+
+# 2. Now try imputation
+set.seed(123)
+imputed_result <- missForest(
+  xmis = as.data.frame(dat_for_impute),  # Convert to data.frame
+  ntree = 100
+)
+
+dat_model_imputed <- imputed_result$ximp
+
+# 3. Random Forest
+set.seed(123)
+rf_fit <- randomForest(
+  fl_albumin_index_log2 ~ .,
+  data = dat_model_imputed,
+  ntree = 1000,
+  importance = TRUE
+)
+
+print(rf_fit)
+
+importance(rf_fit)
+varImpPlot(rf_fit)
+
+# Get actual values
+imp_df <- importance(rf_fit) %>%
+  as.data.frame() %>%
+  tibble::rownames_to_column("variable") %>%
+  arrange(desc(`%IncMSE`))
+
+print(imp_df)
+#result: 
+#Call:
+#  randomForest(formula = fl_albumin_index_log2 ~ ., data = dat_model,      ntree = 1000, importance = TRUE) 
+#                Type of random forest: regression
+#                      Number of trees: 1000
+# No. of variables tried at each split: 2
+
+
+# Modeling
+formula_full <- as.formula(paste0(
+  "fl_albumin_index_log2 ~ (", paste(csf_mri_vars, collapse = " + "), ")"
+))
+
+fit_full <- lm(formula_full, data = dat_model)
+
+fit_selected <- step(
+  fit_full,
+  direction = "both",
+  trace = 0,
+  k = log(nrow(dat_model))
+)
+
+summary(fit_full)
+summary(fit_selected)
+
+e_plot_lm_diagnostics(fit_full, sw_plot_set = c(NA, "simple", "simpleAV", "all")[2])
+e_plot_lm_diagnostics(fit_selected, sw_plot_set = c(NA, "simple", "simpleAV", "all")[3])
+
+```
+
+
+#Now base on AIC do the group analysis
+
+
+#Shared helper 
+
+```{r}
+
+# ── Global panel size — same for every figure in the paper ───────────────────
+PANEL_IN <- 4.5   # every scatter plot = 4.5 × 4.5 inches, always
+
+save_contrast_grid <- function(p_list, filename, remove = integer(0), ncol = 2) {
+  
+  # Expand interaction terms
+  p_expanded <- list()
+  for (i_term in seq_along(p_list)) {
+    n_list <- names(p_list)[i_term]
+    if (stringr::str_detect(n_list, stringr::fixed(":"))) {
+      p_expanded <- c(p_expanded, list(p_list[[i_term]][[1]], p_list[[i_term]][[2]]))
+    } else {
+      p_expanded <- c(p_expanded, list(p_list[[i_term]]))
+    }
+  }
+
+  # Remove unwanted panels
+  if (length(remove) > 0) p_expanded <- p_expanded[-remove]
+
+  # Add top margin to every panel
+  p_expanded <- lapply(p_expanded, function(p) {
+    p + ggplot2::theme(plot.margin = ggplot2::margin(t = 22, r = 5, b = 5, l = 5, unit = "pt"))
+  })
+
+  # Extract shared legend if any panel has one, then strip from ALL panels
+  shared_legend <- NULL
+  for (p in p_expanded) {
+    leg <- cowplot::get_legend(p)
+    if (!is.null(leg)) { shared_legend <- leg; break }
+  }
+  p_expanded <- lapply(p_expanded, function(p) {
+    p + ggplot2::theme(legend.position = "none")
+  })
+
+  # ── Size derived from GLOBAL constant — same across every analysis ──────────
+  n_panels <- length(p_expanded)
+  nrow_val <- ceiling(n_panels / ncol)
+  w        <- ncol   * PANEL_IN   # e.g. 2 × 4.5 = 9 in
+  h        <- nrow_val * PANEL_IN # e.g. 3 × 4.5 = 13.5 in
+  # ─────────────────────────────────────────────────────────────────────────────
+
+  p_grid <- cowplot::plot_grid(
+    plotlist       = p_expanded,
+    labels         = "AUTO",
+    label_size     = 14,
+    label_fontface = "bold",
+    label_x        = 0.02,
+    label_y        = 0.995,
+    nrow           = nrow_val,
+    ncol           = ncol,
+    align          = "hv",
+    axis           = "tblr"
+  )
+
+  # Attach legend to the right if it exists
+  if (!is.null(shared_legend)) {
+    p_grid <- cowplot::plot_grid(
+      p_grid, shared_legend,
+      ncol       = 2,
+      rel_widths = c(1, 0.12)
+    )
+    w <- w + 1
+  }
+
+  ggsave(
+    file.path("All_figures_for_paper", filename),
+    plot   = p_grid,
+    width  = w,
+    height = h,
+    dpi    = 300,
+    bg     = "white"
+  )
+  message("Saved: ", filename, " | ", n_panels, " panels | ", w, "x", h, " in")
+  invisible(p_grid)
+}
+```
+
+
+# Albumin ~ CSF
+```{r}
+
+# --- ANALYSIS 1: Albumin Index ~ Significant CSF variables ---
+sig_csf_alb <- c(
+  
+  "fl_abeta_4240_ratio_log2",        # Aβ42/40 Ratio:
+  "fl_csf__ALL__ptau_log2",          # p-Tau 181:
+  "fl_angio_csf_bfgf_log2" ,
+  "fl_angio_csf_flt_1_log2",
+  "fl_angio_csf_tie2_log2",          # Tie-2: * (X + age:X)
+  # "fl_angio_csf_vegf_d_log2",        # VEGF-D: *
+  "fl_cyto_csf_ifn_g_log2",
+  "fl_csf__ALL__il_1b_log2",
+  "fl_cyto_csf_il_6_log2",
+  "fl_cyto_csf_il_8_log2",           # IL-8: * (X + Age:X)
+  "fl_cyto_csf_il_10_log2",          # IL-10: * (X + Age:X)
+  # "fl_cyto_csf_il_12p70_log2",       # IL-12p70: * (X + ***)
+  # "fl_cyto_csf_tnf_a_log2",          # TNF-α: *
+  "fl_msd_csf_mmp_1_log2",           # MMP-1: **
+  "fl_msd_csf_mmp_2_log2",           # MMP-2: ***
+  "fl_msd_csf_mmp_3_log2",           # MMP-3: *
+  "fl_csf__ALL__mmp_10_log2",        # MMP-10: *
+  "fl_csf__ALL__plgf_log2",          # PlGF: *
+  "fl_csf__ALL__gfap_log2",
+  # "fl_csf_igg_log2",                 # IgG: ***
+  # "fl_igg_index_log2",               # IgG Index: ***
+  # "fl_myelin_basic_protein_log2",    # Myelin Basic Protein: **
+  "fl_csf__ALL__nfl_log2"
+  
+
+  )
+
+# DO it later 
+
+  # "mri_dti_psmd" ,                    # DTI PSMD: * (X + Age:X)
+  # "mri_dti_freewater_mean" ,
+  # "mri_percent_vol_hippo",
+  # "mri_mean_cort_thick_mm"
+
+# Analysis 1: Albumin ~ CSF
+vars_1 <- c("fl_albumin_index_log2", sig_csf_alb) |> unique()
+result_csf_alb <- e_plot_complete_by_variable_subset(
+  dat      = dat_sheet,
+  var_list = vars_1,
+  var_resp = "fl_albumin_index_log2"
+)
+
+
+plot_capture_csf <- grid::grid.grabExpr({
+  result_csf <- e_plot_complete_by_variable_subset(
+    dat = dat_sheet,
+    var_list = vars_1,
+    var_resp = "fl_albumin_index_log2",
+    sw_plot_complete = TRUE  # Or TRUE for all
+  )
+})
+  
+plot_capture_gg_csf <- cowplot::ggdraw(plot_capture_csf)  # <- ggplot now
+
+
+ggsave(
+  "All_figures_for_paper/result_csf_alb.png",
+  plot   = plot_capture_gg_csf,
+  width  = 10,
+  height = 10,
+  dpi    = 300,
+  bg     = "white"
+)
+
+
+
+
+best_subset_vars <- result_csf_alb$var_names[[17]]  # Row 2 from your results
+cat("Using subset with", result_csf_alb$n_complete[17], "complete observations\n")
+cat("Variables:", paste(best_subset_vars, collapse = ", "), "\n")
+
+
+# Extract response and predictors from best_subset_vars
+var_resp_1 <- "fl_albumin_index_log2"
+
+# # Create dataset with complete cases for this subset
+dat_complete <- dat_sheet |>
+  select(all_of(best_subset_vars)) |>
+  filter(complete.cases(pick(everything())))
+
+
+
+# Extract response and predictors from best_subset_vars
+var_resp_1 <- "fl_albumin_index_log2"
+
+# Predictors = everything in best_subset_vars EXCEPT response, age, sex
+# (age and sex should already be in dat_sheet but check if in best_subset_vars)
+pred_vars <- best_subset_vars[!best_subset_vars %in% 
+               c(var_resp_1, "age", "sex")]
+
+cat("Response:", var_resp_2, "\n")
+cat("N complete:", nrow(dat_complete), "\n")
+cat("Predictors (", length(pred_vars), "):\n")
+print(pred_vars)
+
+
+# Make sure age and sex are in dat_complete
+dat_lm_1 <- dat_sheet |>
+  dplyr::select(
+    all_of(var_resp_1),
+    all_of(pred_vars),
+    age, sex
+  ) |>
+  tidyr::drop_na()
+
+
+cat("\nN after adding age/sex and dropping NA:", nrow(dat_lm_1), "\n")
+
+# Full model: age + sex + each X + age:X + sex:X
+form_main <- as.formula(paste(
+  var_resp_1, "~ age + sex +",
+  paste(best_subset_vars, collapse = " + ") #, "+",
+  #paste0("age:", pred_vars, collapse = " + "), "+",
+  #paste0("sex:", pred_vars, collapse = " + ")
+))
+
+
+form_upper <- as.formula(paste(
+  var_resp_1, "~ age + sex +",
+  paste(best_subset_vars, collapse = " + "), "+",
+  paste0("age:", best_subset_vars, collapse = " + "), "+",
+  paste0("sex:", best_subset_vars, collapse = " + ")
+))
+
+form_lower <- as.formula(paste(var_resp_1, "~ 1"))
+
+# Stepwise AIC
+fit_step <- step(
+  lm(form_main, data = dat_lm_1),
+  scope = list(lower = form_lower, upper = form_main),
+  direction = "both",
+  k = 2, #log(nrow(dat_lm_1)), #2,
+  # k = log(nrow(dat_lm_1)),
+  trace = 0
+)
+
+
+
+summary(fit_step)
+# car::Anova(fit_step, type = 3)
+# broom::tidy(fit_step) |> dplyr::arrange(p.value) |> print(n = Inf)
+
+
+
+e_plot_lm_diagnostics(fit_step, sw_plot_set = c(NA, "simple", "simpleAV", "all")[2])
+e_plot_model_contrasts(
+   fit = fit_step,
+  dat_cont = dat_lm_1,
+)
+
+
+
+
+# Apply Erik's contrast function to get all statistical outputs
+fit_contrasts <- e_plot_model_contrasts(
+  fit = fit_step,
+  dat_cont = dat_lm_1,
+  sw_print = FALSE,
+  sw_table_in_plot = FALSE,
+  adjust_method = "bonferroni",  # Adjust for multiple comparisons
+  CI_level = 0.95,
+  sw_marginal_even_if_interaction = TRUE,
+  sw_TWI_plots_keep = "singles",
+  sw_produce_plots = TRUE
+)
+
+# Remove the specific unwanted plot by name
+# fit_contrasts$plots[["sex"]] <- NULL
+library(cowplot)
+
+# ── 1. Recursive extractor: pulls every ggplot out of a nested list ──────────
+extract_all_gg <- function(x) {
+  if (inherits(x, c("gg", "ggplot"))) return(list(x))
+  if (is.list(x)) return(unlist(lapply(x, extract_all_gg), recursive = FALSE))
+  NULL
+}
+
+all_contrast_plots <- extract_all_gg(fit_contrasts$plots)
+n_plots <- length(all_contrast_plots)
+cat("Found", n_plots, "ggplot(s) in fit_contrasts$plots\n")
+
+
+plot_albumin_csf <- save_contrast_grid(fit_contrasts$plots, "plot_albumin_csf.png")
+
+
+
+
+
+```
+
+#  Ktrans ~ CSF
+```{r}
+# --- ANALYSIS 2: 3T Permeability ~ Significant CSF variables ---
+sig_csf_perm <- c(
+  
+  "fl_angio_csf_vegf_c_log2" ,
+  "fl_cyto_csf_ifn_g_log2",
+  "fl_cyto_csf_il_10_log2" ,
+  "fl_csf__ALL__gfap_log2",   
+  "fl_csf_igg_log2" ,
+  "fl_csf__ALL__il_1b_log2",         # IL-1β: *
+  "fl_msd_csf_mmp_2_log2",          # MMP-2: *
+  "fl_csf__ALL__nfl_log2"        # NFL: * (Gender:X + Age:X)
+  # "mri_dti_psmd",                   # DTI PSMD: * (X + Age:X + **)
+  # "mri_dti_freewater_mean"          # Mean Free Water: * (Age:X + **)
+)
+
+# Analysis 2: perm ~ CSF
+vars_2 <- c("mri_perm_3t_tot_log2", sig_csf_perm) |> unique()
+result_csf_perm <- e_plot_complete_by_variable_subset(
+  dat      = dat_sheet,
+  var_list = vars_2,
+  var_resp = "mri_perm_3t_tot_log2"
+)
+
+
+plot_capture_csf <- grid::grid.grabExpr({
+  result_csf <- e_plot_complete_by_variable_subset(
+    dat = dat_sheet,
+    var_list = vars_2,
+    var_resp = "mri_perm_3t_tot_log2",
+    sw_plot_complete = TRUE  # Or TRUE for all
+  )
+})
+  
+plot_capture_ktrans_csf<- cowplot::ggdraw(plot_capture_csf)  # <- ggplot now
+
+
+ggsave(
+  "All_figures_for_paper/plot_capture_ktrans_csf.png",
+  plot   = plot_capture_ktrans_csf,
+  width  = 10,
+  height = 10,
+  dpi    = 300,
+  bg     = "white"
+)
+
+
+best_subset_vars <- result_csf_perm$var_names[[7]]  # Row 2 from your results
+cat("Using subset with", result_csf_perm$n_complete[7], "complete observations\n")
+cat("Variables:", paste(best_subset_vars, collapse = ", "), "\n\n")
+
+
+# # Create dataset with complete cases for this subset
+dat_complete <- dat_sheet |>
+  select(all_of(best_subset_vars)) |>
+  filter(complete.cases(pick(everything())))
+
+
+
+# Extract response and predictors from best_subset_vars
+var_resp_2 <- "mri_perm_3t_tot_log2"
+
+# Predictors = everything in best_subset_vars EXCEPT response, age, sex
+# (age and sex should already be in dat_sheet but check if in best_subset_vars)
+pred_vars <- best_subset_vars[!best_subset_vars %in% 
+               c(var_resp_2, "age", "sex")]
+
+cat("Response:", var_resp_2, "\n")
+cat("N complete:", nrow(dat_complete), "\n")
+cat("Predictors (", length(pred_vars), "):\n")
+print(pred_vars)
+
+# Make sure age and sex are in dat_complete
+dat_lm_2 <- dat_sheet |>
+  dplyr::select(
+    all_of(var_resp_2),
+    all_of(pred_vars),
+    age, sex
+  ) |>
+  tidyr::drop_na()
+
+cat("\nN after adding age/sex and dropping NA:", nrow(dat_lm_2), "\n")
+
+form_main <- as.formula(paste(
+  var_resp_2, "~ age + sex +",
+  paste(pred_vars, collapse = " + ") #, "+",
+  #paste0("age:", pred_vars, collapse = " + "), "+",
+  #paste0("sex:", pred_vars, collapse = " + ")
+))
+
+
+# Full model: age + sex + each X + age:X + sex:X
+form_upper <- as.formula(paste(
+  var_resp_2, "~ age + sex +",
+  paste(pred_vars, collapse = " + "), "+",
+  paste0("age:", pred_vars, collapse = " + "), "+",
+  paste0("sex:", pred_vars, collapse = " + ")
+))
+
+form_lower <- as.formula(paste(var_resp_2, "~ 1"))
+
+# Stepwise AIC
+fit_step <- step(
+  lm(form_main, data = dat_lm_2),
+  scope = list(lower = form_lower, upper = form_upper),
+  direction = "both",
+  k = 2,
+  trace = 0
+)
+
+summary(fit_step)
+# car::Anova(fit_step, type = 3)
+# broom::tidy(fit_step) |> dplyr::arrange(p.value) |> print(n = Inf)
+
+
+
+e_plot_lm_diagnostics(fit_step, sw_plot_set = c(NA, "simple", "simpleAV", "all")[2])
+
+e_plot_model_contrasts(
+   fit = fit_step,
+  dat_cont = dat_lm_2,
+)
+
+
+
+
+
+
+
+
+
+# Apply Erik's contrast function to get all statistical outputs
+fit_contrasts <- e_plot_model_contrasts(
+  fit = fit_step,
+  dat_cont = dat_lm_2,
+  sw_print = FALSE,
+  sw_table_in_plot = FALSE,
+  adjust_method = "bonferroni",  # Adjust for multiple comparisons
+  CI_level = 0.95,
+  sw_marginal_even_if_interaction = TRUE,
+  sw_TWI_plots_keep = "singles",
+  sw_produce_plots = TRUE
+)
+
+# Remove the specific unwanted plot by name
+# fit_contrasts$plots[["sex"]] <- NULL
+library(cowplot)
+
+# ── 1. Recursive extractor: pulls every ggplot out of a nested list ──────────
+extract_all_gg <- function(x) {
+  if (inherits(x, c("gg", "ggplot"))) return(list(x))
+  if (is.list(x)) return(unlist(lapply(x, extract_all_gg), recursive = FALSE))
+  NULL
+}
+
+all_contrast_plots <- extract_all_gg(fit_contrasts$plots)
+n_plots <- length(all_contrast_plots)
+cat("Found", n_plots, "ggplot(s) in fit_contrasts$plots\n")
+
+plot_ktrans_csf <- save_contrast_grid(
+  p_list   = fit_contrasts$plots,
+  filename = "plot_ktrans_csf.png",
+  remove   = c(1, 5)        # same positions_to_remove you had
+)
+```
+
+
+# Albumin ~ Plsama
+
+```{r}
+# --- ANALYSIS 3: Albumin Index ~ Significant Plasma variables ---
+sig_plasma_alb <- c(
+  # "fl_plasma__ALL__ptau_181_log2",       # p-Tau 181: *
+  "fl_plasma__ALL__abeta_40_log2",       # Aβ40: * (X + colored Age:X, Gender:X)
+  "fl_plasma__ALL__abeta_42_log2",       # Aβ42: * (X + *)
+  # "fl_plasma__ALL__bfgf_log2",           # bFGF: *
+  # "fl_plasma__ALL__flt_1_log2",          # Flt-1: *
+  # "fl_plasma__ALL__tie2_log2",           # Tie-2: *
+  # "fl_plasma__ALL__vegf_a_log2",         # VEGF-A: *
+  # "fl_plasma__ALL__vegf_c_log2",         # VEGF-C: *
+  "fl_plasma__ALL__vegf_d_log2",         # VEGF-D: * (X + *)
+  # "fl_cyto_heparin_plasma_ifn_g_log2",   # IFN-γ: *
+  "fl_plasma__ALL__il_1b_log2",          # IL-1β: * (X + Gender:X)
+  # "fl_cyto_heparin_plasma_il_2_log2",    # IL-2: *
+  # "fl_cyto_heparin_plasma_il_6_log2",    # IL-6: **
+  # "fl_cyto_heparin_plasma_il_8_log2",    # IL-8: *
+  "fl_cyto_heparin_plasma_il_10_log2",   # IL-10: *
+  # "fl_cyto_heparin_plasma_il_12p70_log2",# IL-12p70: *
+  # "fl_cyto_heparin_plasma_il_13_log2",   # IL-13: *
+  # "fl_plasma__ALL__mmp_1_log2",          # MMP-1: *
+  "fl_plasma__ALL__mmp_2_log2",          # MMP-2: * (X + Age:X)
+  "fl_plasma__ALL__mmp_3_log2",          # MMP-3: **
+  # "fl_plasma__ALL__mmp_9_log2",          # MMP-9: *
+  "fl_plasma__ALL__mmp_10_log2",         # MMP-10: * (X + *)
+  # "fl_plasma__ALL__plgf_log2",           # PlGF: *
+  # "fl_plasma__ALL__nfl_log2",            # NFL: *
+  "fl_serum_igg_log2"                    # Serum IgG: *** (X + **)
+)
+
+
+
+
+# Analysis 1: Albumin ~ CSF
+vars_1 <- c("fl_albumin_index_log2", sig_plasma_alb) |> unique()
+result_plasma_alb <- e_plot_complete_by_variable_subset(
+  dat      = dat_sheet,
+  var_list = vars_1,
+  var_resp = "fl_albumin_index_log2"
+)
+
+plot_capture_plasma <- grid::grid.grabExpr({
+  result_csf <- e_plot_complete_by_variable_subset(
+    dat = dat_sheet,
+    var_list = vars_1,
+    var_resp = "fl_albumin_index_log2",
+    sw_plot_complete = TRUE  # Or TRUE for all
+  )
+})
+  
+plot_capture_gg_plasma <- cowplot::ggdraw(plot_capture_plasma)  # <- ggplot now
+
+
+ggsave(
+  "All_figures_for_paper/plot_capture_plasma.png",
+  plot   = plot_capture_gg_plasma,
+  width  = 10,
+  height = 10,
+  dpi    = 300,
+  bg     = "white"
+)
+
+
+
+best_subset_vars <- result_plasma_alb$var_names[[15]]  # Row 2 from your results
+cat("Using subset with", result_plasma_alb$n_complete[15], "complete observations\n")
+cat("Variables:", paste(best_subset_vars, collapse = ", "), "\n\n")
+
+
+# Create dataset with complete cases for this subset
+dat_complete <- dat_sheet |> 
+  select(all_of(best_subset_vars)) |> 
+  filter(complete.cases(pick(everything())))
+
+
+
+
+# Extract response and predictors from best_subset_vars
+var_resp_1 <- "fl_albumin_index_log2"
+
+# Predictors = everything in best_subset_vars EXCEPT response, age, sex
+# (age and sex should already be in dat_sheet but check if in best_subset_vars)
+pred_vars <- best_subset_vars[!best_subset_vars %in% 
+               c(var_resp_1, "age", "sex")]
+
+cat("Response:", var_resp_1, "\n")
+cat("N complete:", nrow(dat_complete), "\n")
+cat("Predictors (", length(pred_vars), "):\n")
+print(pred_vars)
+
+# Make sure age and sex are in dat_complete
+dat_lm_1 <- dat_sheet |>
+  dplyr::select(
+    all_of(var_resp_1),
+    all_of(pred_vars),
+    age, sex
+  ) |>
+  tidyr::drop_na()
+
+cat("\nN after adding age/sex and dropping NA:", nrow(dat_lm_1), "\n")
+
+
+form_main <- as.formula(paste(
+  var_resp_1, "~ age + sex +",
+  paste(pred_vars, collapse = " + ") #, "+",
+  #paste0("age:", pred_vars, collapse = " + "), "+",
+  #paste0("sex:", pred_vars, collapse = " + ")
+))
+
+# Full model: age + sex + each X + age:X + sex:X
+form_upper <- as.formula(paste(
+  var_resp_1, "~ age + sex +",
+  paste(pred_vars, collapse = " + "), "+",
+  paste0("age:", pred_vars, collapse = " + "), "+",
+  paste0("sex:", pred_vars, collapse = " + ")
+))
+
+form_lower <- as.formula(paste(var_resp_1, "~ 1"))
+
+# Stepwise AIC
+fit_step <- step(
+  lm(form_main, data = dat_lm_1),
+  scope = list(lower = form_lower, upper = form_main),
+  direction = "both",
+  k = 2,
+  # k= log(nrow(dat_lm_1))
+  trace = 0
+)
+
+summary(fit_step)
+car::Anova(fit_step, type = 3)
+broom::tidy(fit_step) |> dplyr::arrange(p.value) |> print(n = Inf)
+
+
+
+e_plot_lm_diagnostics(fit_step, sw_plot_set = c(NA, "simple", "simpleAV", "all")[2])
+
+e_plot_model_contrasts(
+   fit = fit_step,
+  dat_cont = dat_lm_1,
+)
+
+
+
+# Apply Erik's contrast function to get all statistical outputs
+fit_contrasts <- e_plot_model_contrasts(
+  fit = fit_step,
+  dat_cont = dat_lm_1,
+  sw_print = FALSE,
+  sw_table_in_plot = FALSE,
+  adjust_method = "bonferroni",  # Adjust for multiple comparisons
+  CI_level = 0.95,
+  sw_marginal_even_if_interaction = TRUE,
+  sw_TWI_plots_keep = "singles",
+  sw_produce_plots = TRUE
+)
+
+# Remove the specific unwanted plot by name
+# fit_contrasts$plots[["sex"]] <- NULL
+library(cowplot)
+
+# ── 1. Recursive extractor: pulls every ggplot out of a nested list ──────────
+extract_all_gg <- function(x) {
+  if (inherits(x, c("gg", "ggplot"))) return(list(x))
+  if (is.list(x)) return(unlist(lapply(x, extract_all_gg), recursive = FALSE))
+  NULL
+}
+
+all_contrast_plots <- extract_all_gg(fit_contrasts$plots)
+n_plots <- length(all_contrast_plots)
+cat("Found", n_plots, "ggplot(s) in fit_contrasts$plots\n")
+
+
+plot_albumin_plasma <- save_contrast_grid(
+  p_list   = fit_contrasts$plots,
+  filename = "plot_Albumin_plasma.png",
+  remove   = c(1)
+)
+
+
+
+```
+
+
+# Ktrans~ plasma
+
+```{r}
+
+# --- ANALYSIS 4: 3T Permeability ~ Significant Plasma variables ---
+sig_plasma_perm <- c(
+  "fl_plasma__ALL__ptau_181_log2",   # p-Tau 181: *
+  "fl_plasma__ALL__abeta_40_log2",   # Aβ40: * (X + colored tiles)
+  "fl_plasma__ALL__vegf_a_log2",     # VEGF-A: * (Gender:X)
+  "fl_plasma__ALL__vegf_c_log2",     # VEGF-C: large positive (Age:X?)
+  "fl_cyto_heparin_plasma_ifn_g_log2",
+   "fl_cyto_heparin_plasma_il_13_log2" ,
+  "fl_plasma__ALL__mmp_9_log2",      # MMP-9: * (X + Gender:X)
+  "fl_plasma__ALL__plgf_log2"        # PlGF: * (X + red/blue tiles)
+)
+
+
+# Analysis4 : perm ~ plasma
+vars_2 <- c("mri_perm_3t_tot_log2", sig_plasma_perm) |> unique()
+result_plasma_perm <- e_plot_complete_by_variable_subset(
+  dat      = dat_sheet,
+  var_list = vars_2,
+  var_resp = "mri_perm_3t_tot_log2"
+)
+
+
+plot_capture_plasma <- grid::grid.grabExpr({
+  result_csf <- e_plot_complete_by_variable_subset(
+    dat = dat_sheet,
+    var_list = vars_2,
+    var_resp = "mri_perm_3t_tot_log2",
+    sw_plot_complete = TRUE  # Or TRUE for all
+  )
+})
+  
+plot_capture_ktrans_plasma<- cowplot::ggdraw(plot_capture_plasma)  # <- ggplot now
+
+
+ggsave(
+  "All_figures_for_paper/plot_capture_ktrans_plasma.png",
+  plot   = plot_capture_ktrans_plasma,
+  width  = 10,
+  height = 10,
+  dpi    = 300,
+  bg     = "white"
+)
+
+
+
+best_subset_vars <- result_plasma_perm$var_names[[6]]  # Row 2 from your results
+cat("Using subset with", result_plasma_perm$n_complete[6], "complete observations\n")
+cat("Variables:", paste(best_subset_vars, collapse = ", "), "\n\n")
+
+
+# Create dataset with complete cases for this subset
+dat_complete <- dat_sheet |> 
+  select(all_of(best_subset_vars)) |> 
+  filter(complete.cases(pick(everything())))
+
+
+
+
+# Extract response and predictors from best_subset_vars
+var_resp_2 <- "mri_perm_3t_tot_log2"
+
+# Predictors = everything in best_subset_vars EXCEPT response, age, sex
+# (age and sex should already be in dat_sheet but check if in best_subset_vars)
+pred_vars <- best_subset_vars[!best_subset_vars %in% 
+               c(var_resp_2, "age", "sex")]
+
+cat("Response:", var_resp_2, "\n")
+cat("N complete:", nrow(dat_complete), "\n")
+cat("Predictors (", length(pred_vars), "):\n")
+print(pred_vars)
+
+# Make sure age and sex are in dat_complete
+dat_lm_2 <- dat_sheet |>
+  dplyr::select(
+    all_of(var_resp_2),
+    all_of(pred_vars),
+    age, sex
+  ) |>
+  tidyr::drop_na()
+
+cat("\nN after adding age/sex and dropping NA:", nrow(dat_lm_2), "\n")
+
+
+form_main <- as.formula(paste(
+  var_resp_2, "~ age + sex +",
+  paste(pred_vars, collapse = " + ") #, "+",
+  #paste0("age:", pred_vars, collapse = " + "), "+",
+  #paste0("sex:", pred_vars, collapse = " + ")
+))
+
+# Full model: age + sex + each X + age:X + sex:X
+form_upper <- as.formula(paste(
+  var_resp_2, "~ age + sex +",
+  paste(pred_vars, collapse = " + "), "+",
+  paste0("age:", pred_vars, collapse = " + "), "+",
+  paste0("sex:", pred_vars, collapse = " + ")
+))
+
+form_lower <- as.formula(paste(var_resp_2, "~ 1"))
+
+# Stepwise AIC
+fit_step <- step(
+  lm(form_main, data = dat_lm_2),
+  scope = list(lower = form_lower, upper = form_main),
+  direction = "both",
+  k = 2,
+  trace = 0
+)
+
+summary(fit_step)
+# car::Anova(fit_step, type = 3)
+# broom::tidy(fit_step) |> dplyr::arrange(p.value) |> print(n = Inf)
+
+
+
+e_plot_lm_diagnostics(fit_step, sw_plot_set = c(NA, "simple", "simpleAV", "all")[2])
+
+
+e_plot_model_contrasts(
+   fit = fit_step,
+  dat_cont = dat_lm_2,
+)
+
+# Apply Erik's contrast function to get all statistical outputs
+fit_contrasts <- e_plot_model_contrasts(
+  fit = fit_step,
+  dat_cont = dat_lm_2,
+  sw_print = FALSE,
+  sw_table_in_plot = FALSE,
+  adjust_method = "bonferroni",  # Adjust for multiple comparisons
+  CI_level = 0.95,
+  sw_marginal_even_if_interaction = TRUE,
+  sw_TWI_plots_keep = "singles",
+  sw_produce_plots = TRUE
+)
+
+# Remove the specific unwanted plot by name
+# fit_contrasts$plots[["sex"]] <- NULL
+library(cowplot)
+
+# ── 1. Recursive extractor: pulls every ggplot out of a nested list ──────────
+extract_all_gg <- function(x) {
+  if (inherits(x, c("gg", "ggplot"))) return(list(x))
+  if (is.list(x)) return(unlist(lapply(x, extract_all_gg), recursive = FALSE))
+  NULL
+}
+
+all_contrast_plots <- extract_all_gg(fit_contrasts$plots)
+n_plots <- length(all_contrast_plots)
+cat("Found", n_plots, "ggplot(s) in fit_contrasts$plots\n")
+
+
+plot_ktrans_plasma <- save_contrast_grid(
+  p_list   = fit_contrasts$plots,
+  filename = "plot_ktrans_plasma.png"
+  # no removals
+)
+
+
+```
+
+# mri realtionship to albumin 
+
+```{r}
+# --- ANALYSIS 1: Albumin Index ~ Significant CSF variables ---
+sig_csf_alb <- c(
+  
+  "mri_dti_psmd" ,                    # DTI PSMD: * (X + Age:X)
+  "mri_dti_freewater_mean" ,
+  "mri_percent_vol_hippo",
+  "mri_mean_cort_thick_mm"
+
+  )
+
+
+# Analysis 1: Albumin ~ CSF
+vars_1 <- c("fl_albumin_index_log2", sig_csf_alb) |> unique()
+result_csf_alb <- e_plot_complete_by_variable_subset(
+  dat      = dat_sheet,
+  var_list = vars_1,
+  var_resp = "fl_albumin_index_log2"
+)
+
+
+plot_capture_mri <- grid::grid.grabExpr({
+  result_csf <- e_plot_complete_by_variable_subset(
+    dat = dat_sheet,
+    var_list = vars_1,
+    var_resp = "fl_albumin_index_log2",
+    sw_plot_complete = TRUE  # Or TRUE for all
+  )
+})
+  
+plot_capture_gg_mri<- cowplot::ggdraw(plot_capture_mri)  # <- ggplot now
+
+
+ggsave(
+  "All_figures_for_paper/plot_capture_mri.png",
+  plot   = plot_capture_gg_mri,
+  width  = 10,
+  height = 10,
+  dpi    = 300,
+  bg     = "white"
+)
+
+
+best_subset_vars <- result_csf_alb$var_names[[5]]  # Row 2 from your results
+cat("Using subset with", result_csf_alb$n_complete[5], "complete observations\n")
+cat("Variables:", paste(best_subset_vars, collapse = ", "), "\n")
+
+
+# Extract response and predictors from best_subset_vars
+var_resp_1 <- "fl_albumin_index_log2"
+
+# # Create dataset with complete cases for this subset
+dat_complete <- dat_sheet |>
+  select(all_of(best_subset_vars)) |>
+  filter(complete.cases(pick(everything())))
+
+
+
+# Extract response and predictors from best_subset_vars
+var_resp_1 <- "fl_albumin_index_log2"
+
+# Predictors = everything in best_subset_vars EXCEPT response, age, sex
+# (age and sex should already be in dat_sheet but check if in best_subset_vars)
+pred_vars <- best_subset_vars[!best_subset_vars %in% 
+               c(var_resp_1, "age", "sex")]
+
+cat("Response:", var_resp_2, "\n")
+cat("N complete:", nrow(dat_complete), "\n")
+cat("Predictors (", length(pred_vars), "):\n")
+print(pred_vars)
+
+
+# Make sure age and sex are in dat_complete
+dat_lm_1 <- dat_sheet |>
+  dplyr::select(
+    all_of(var_resp_1),
+    all_of(pred_vars),
+    age, sex
+  ) |>
+  tidyr::drop_na()
+
+
+cat("\nN after adding age/sex and dropping NA:", nrow(dat_lm_1), "\n")
+
+# Full model: age + sex + each X + age:X + sex:X
+form_main <- as.formula(paste(
+  var_resp_1, "~ age + sex +",
+  paste(best_subset_vars, collapse = " + ") #, "+",
+  #paste0("age:", pred_vars, collapse = " + "), "+",
+  #paste0("sex:", pred_vars, collapse = " + ")
+))
+
+
+form_upper <- as.formula(paste(
+  var_resp_1, "~ age + sex +",
+  paste(best_subset_vars, collapse = " + "), "+",
+  paste0("age:", best_subset_vars, collapse = " + "), "+",
+  paste0("sex:", best_subset_vars, collapse = " + ")
+))
+
+form_lower <- as.formula(paste(var_resp_1, "~ 1"))
+
+# Stepwise AIC
+fit_step <- step(
+  lm(form_main, data = dat_lm_1),
+  scope = list(lower = form_lower, upper = form_upper),
+  direction = "both",
+  k = 2, #log(nrow(dat_lm_1)), #2,
+  # k = log(nrow(dat_lm_1)),
+  trace = 0
+)
+
+
+
+summary(fit_step)
+# car::Anova(fit_step, type = 3)
+# broom::tidy(fit_step) |> dplyr::arrange(p.value) |> print(n = Inf)
+
+
+
+e_plot_lm_diagnostics(fit_step, sw_plot_set = c(NA, "simple", "simpleAV", "all")[2])
+e_plot_model_contrasts(
+   fit = fit_step,
+  dat_cont = dat_lm_1,
+)
+
+
+
+
+
+# Apply Erik's contrast function to get all statistical outputs
+fit_contrasts <- e_plot_model_contrasts(
+  fit = fit_step,
+  dat_cont = dat_lm_1,
+  sw_print = FALSE,
+  sw_table_in_plot = FALSE,
+  adjust_method = "bonferroni",  # Adjust for multiple comparisons
+  CI_level = 0.95,
+  sw_marginal_even_if_interaction = TRUE,
+  sw_TWI_plots_keep = "singles",
+  sw_produce_plots = TRUE
+)
+
+# Remove the specific unwanted plot by name
+# fit_contrasts$plots[["sex"]] <- NULL
+library(cowplot)
+
+# ── 1. Recursive extractor: pulls every ggplot out of a nested list ──────────
+extract_all_gg <- function(x) {
+  if (inherits(x, c("gg", "ggplot"))) return(list(x))
+  if (is.list(x)) return(unlist(lapply(x, extract_all_gg), recursive = FALSE))
+  NULL
+}
+
+all_contrast_plots <- extract_all_gg(fit_contrasts$plots)
+n_plots <- length(all_contrast_plots)
+cat("Found", n_plots, "ggplot(s) in fit_contrasts$plots\n")
+
+plot_albumin_mri <- save_contrast_grid(
+  p_list   = fit_contrasts$plots,
+  filename = "plot_Albumin_mri.png",
+  remove   = c(1, 4, 6)
+)
+```
+
+#mri to permablity
+
+```{r}
+# --- ANALYSIS 1: Albumin Index ~ Significant CSF variables ---
+sig_csf_alb <- c(
+  
+  "mri_dti_psmd" ,                    # DTI PSMD: * (X + Age:X)
+  "mri_dti_freewater_mean" ,
+  "mri_percent_vol_hippo",
+  "mri_mean_cort_thick_mm"
+
+  )
+
+
+# Analysis 1: Albumin ~ CSF
+vars_2 <- c("mri_perm_3t_tot_log2", sig_csf_alb) |> unique()
+result_ktrans_mri <- e_plot_complete_by_variable_subset(
+  dat      = dat_sheet,
+  var_list = vars_2,
+  var_resp = "mri_perm_3t_tot_log2"
+)
+
+plot_capture_mri <- grid::grid.grabExpr({
+  result_mru <- e_plot_complete_by_variable_subset(
+    dat = dat_sheet,
+    var_list = vars_2,
+    var_resp = "mri_perm_3t_tot_log2",
+    sw_plot_complete = TRUE  # Or TRUE for all
+  )
+})
+  
+
+plot_capture_ktrans_mri<- cowplot::ggdraw(plot_capture_mri)  # <- ggplot now
+
+
+ggsave(
+  "All_figures_for_paper/plot_capture_ktrans_mri.png",
+  plot   = plot_capture_ktrans_mri,
+  width  = 10,
+  height = 10,
+  dpi    = 300,
+  bg     = "white"
+)
+
+
+
+best_subset_vars <- result_csf_alb$var_names[[3]]  # Row 2 from your results
+cat("Using subset with", result_csf_alb$n_complete[3], "complete observations\n")
+cat("Variables:", paste(best_subset_vars, collapse = ", "), "\n")
+
+
+# Extract response and predictors from best_subset_vars
+var_resp_2 <- "mri_perm_3t_tot_log2"
+
+# # Create dataset with complete cases for this subset
+dat_complete <- dat_sheet |>
+  select(all_of(best_subset_vars)) |>
+  filter(complete.cases(pick(everything())))
+
+
+
+# Extract response and predictors from best_subset_vars
+var_resp_2 <- "mri_perm_3t_tot_log2"
+
+# Predictors = everything in best_subset_vars EXCEPT response, age, sex
+# (age and sex should already be in dat_sheet but check if in best_subset_vars)
+pred_vars <- best_subset_vars[!best_subset_vars %in% 
+               c(var_resp_2, "age", "sex")]
+
+cat("Response:", var_resp_2, "\n")
+cat("N complete:", nrow(dat_complete), "\n")
+cat("Predictors (", length(pred_vars), "):\n")
+print(pred_vars)
+
+
+# Make sure age and sex are in dat_complete
+dat_lm_2 <- dat_sheet |>
+  dplyr::select(
+    all_of(var_resp_2),
+    all_of(pred_vars),
+    age, sex
+  ) |>
+  tidyr::drop_na()
+
+
+cat("\nN after adding age/sex and dropping NA:", nrow(dat_lm_2), "\n")
+
+# Full model: age + sex + each X + age:X + sex:X
+form_main <- as.formula(paste(
+  var_resp_2, "~ age + sex +",
+  paste(best_subset_vars, collapse = " + ") #, "+",
+  #paste0("age:", pred_vars, collapse = " + "), "+",
+  #paste0("sex:", pred_vars, collapse = " + ")
+))
+
+
+form_upper <- as.formula(paste(
+  var_resp_2, "~ age + sex +",
+  paste(best_subset_vars, collapse = " + "), "+",
+  paste0("age:", best_subset_vars, collapse = " + "), "+",
+  paste0("sex:", best_subset_vars, collapse = " + ")
+))
+
+form_lower <- as.formula(paste(var_resp_2, "~ 1"))
+
+# Stepwise AIC
+fit_step <- step(
+  lm(form_main, data = dat_lm_2),
+  scope = list(lower = form_lower, upper = form_upper),
+  direction = "both",
+  k = 2, #log(nrow(dat_lm_1)), #2,
+  # k = log(nrow(dat_lm_1)),
+  trace = 0
+)
+
+
+
+summary(fit_step)
+# car::Anova(fit_step, type = 3)
+# broom::tidy(fit_step) |> dplyr::arrange(p.value) |> print(n = Inf)
+
+
+
+e_plot_lm_diagnostics(fit_step, sw_plot_set = c(NA, "simple", "simpleAV", "all")[2])
+e_plot_model_contrasts(
+   fit = fit_step,
+  dat_cont = dat_lm_2,
+)
+
+
+
+
+# Apply Erik's contrast function to get all statistical outputs
+fit_contrasts <- e_plot_model_contrasts(
+  fit = fit_step,
+  dat_cont = dat_lm_2,
+  sw_print = FALSE,
+  sw_table_in_plot = FALSE,
+  adjust_method = "bonferroni",  # Adjust for multiple comparisons
+  CI_level = 0.95,
+  sw_marginal_even_if_interaction = TRUE,
+  sw_TWI_plots_keep = "singles",
+  sw_produce_plots = TRUE
+)
+
+# Remove the specific unwanted plot by name
+# fit_contrasts$plots[["sex"]] <- NULL
+library(cowplot)
+
+# ── 1. Recursive extractor: pulls every ggplot out of a nested list ──────────
+extract_all_gg <- function(x) {
+  if (inherits(x, c("gg", "ggplot"))) return(list(x))
+  if (is.list(x)) return(unlist(lapply(x, extract_all_gg), recursive = FALSE))
+  NULL
+}
+
+all_contrast_plots <- extract_all_gg(fit_contrasts$plots)
+n_plots <- length(all_contrast_plots)
+cat("Found", n_plots, "ggplot(s) in fit_contrasts$plots\n")
+
+
+plot_ktrans_mri <- save_contrast_grid(
+  p_list   = fit_contrasts$plots,
+  filename = "plot_ktrans_mri.png"
+  # no removals
+)
+```
+
+# GFAP as response :GFAP CSF VS CSF
+
+```{r}
+# ── CSF GFAP ~ CSF + Plasma + MRI ───────────────────────────────────────────
+
+sig_csf_gfap <- c(
+  # CSF AD (colored)
+  "fl_abeta_4240_ratio_log2",
+  "fl_csf__ALL__ptau_log2",
+  # CSF Angio (colored)
+  "fl_angio_csf_tie2_log2",
+  "fl_angio_csf_vegf_a_log2",
+  "fl_angio_csf_flt_1_log2",
+  # CSF Cytokines (colored)
+  "fl_cyto_csf_ifn_g_log2",
+  "fl_csf__ALL__il_1b_log2",
+  "fl_cyto_csf_il_4_log2",
+  "fl_cyto_csf_il_8_log2",
+  "fl_cyto_csf_il_10_log2" ,
+  "fl_cyto_csf_il_12p70_log2",
+  # CSF MMP (colored)
+   "fl_msd_csf_mmp_3_log2" ,
+  "fl_msd_csf_mmp_9_log2",
+  "fl_csf__ALL__mmp_10_log2",
+  
+  # CSF Other (colored)
+  "fl_myelin_basic_protein_log2" ,
+  "fl_csf__ALL__nfl_log2",
+  "fl_albumin_index_log2"
+
+)
+
+# MRi 
+  # MRI (colored)
+  # "mri_mean_cort_thick_mm",
+  # "mri_dti_freewater_mean",
+  #  "mri_dti_psmd"   ,
+  #  "mri_percent_vol_hippo" 
+
+vars_gfap_csf <- c("fl_csf__ALL__gfap_log2", sig_csf_gfap) |> unique()
+
+result_csf_gfap <- e_plot_complete_by_variable_subset(
+  dat      = dat_sheet,
+  var_list = vars_gfap_csf,
+  var_resp = "fl_csf__ALL__gfap_log2"
+)
+
+#later I can add that if need  to save it
+# plot_capture_csf_gfap <- grid::grid.grabExpr({
+#   e_plot_complete_by_variable_subset(
+#     dat              = dat_sheet,
+#     var_list         = vars_gfap_csf,
+#     var_resp         = "fl_csf__ALL__gfap_log2",
+#     sw_n_complete = 5
+#     )
+# })
+# 
+# 
+# ggsave(
+#   "All_figures_for_paper/plot_capture_csf_gfap_tradeoff.png",
+#   plot   = cowplot::ggdraw(plot_capture_csf_gfap),
+#   width  = 10, height = 10, dpi = 300, bg = "white"
+# )
+
+# Print to choose best row
+print(result_csf_gfap[, c("n_complete", "n_vars")])
+
+# ── Adjust row index after inspecting the trade-off plot ────────────────────
+best_subset_vars <- result_csf_gfap$table$var_names[[5]]
+cat("N complete:", result_csf_gfap$table$n_complete[5], "\n")
+cat("Variables:", paste(best_subset_vars, collapse = ", "), "\n")
+
+var_resp_gfap_csf <- "fl_csf__ALL__gfap_log2"
+
+pred_vars <- best_subset_vars[!best_subset_vars %in%
+               c(var_resp_gfap_csf, "age", "sex")]
+
+dat_lm_csf_gfap <- dat_sheet |>
+  dplyr::select(all_of(var_resp_gfap_csf), all_of(pred_vars), age, sex) |>
+  tidyr::drop_na()
+
+cat("N after drop_na:", nrow(dat_lm_csf_gfap), "\n")
+cat("Predictors (", length(pred_vars), "):\n")
+print(pred_vars)
+
+form_main_csf_gfap <- as.formula(paste(
+  var_resp_gfap_csf, "~ age + sex +",
+  paste(pred_vars, collapse = " + ")
+))
+
+form_upper_csf_gfap <- as.formula(paste(
+  var_resp_gfap_csf, "~ age + sex +",
+  paste(pred_vars, collapse = " + "), "+",
+  paste0("age:", pred_vars, collapse = " + "), "+",
+  paste0("sex:", pred_vars, collapse = " + ")
+))
+
+
+form_lower_csf_gfap <- as.formula(paste(var_resp_gfap_csf, "~ 1"))
+
+fit_step_csf_gfap <- step(
+  lm(form_main_csf_gfap, data = dat_lm_csf_gfap),
+  scope     = list(lower = form_lower_csf_gfap, upper = form_upper_csf_gfap),
+  direction = "both",
+  k         = 2,
+  trace     = 0
+)
+
+
+summary(fit_step_csf_gfap)
+
+e_plot_lm_diagnostics(fit_step_csf_gfap,
+  sw_plot_set = c(NA, "simple", "simpleAV", "all")[2])
+
+fit_contrasts_csf_gfap <- e_plot_model_contrasts(
+  fit                            = fit_step_csf_gfap,
+  dat_cont                       = dat_lm_csf_gfap,
+  sw_print                       = FALSE,
+  sw_table_in_plot               = FALSE,
+  adjust_method                  = "bonferroni",
+  CI_level                       = 0.95,
+  sw_marginal_even_if_interaction = TRUE,
+  sw_TWI_plots_keep              = "singles",
+  sw_produce_plots               = TRUE
+)
+
+plot_csf_gfap <- save_contrast_grid(
+  p_list   = fit_contrasts_csf_gfap$plots,
+  filename = "plot_csf_gfap_vs_all.png"
+)
+
+
+
+```
+
+# GFAP as response :GFAP PLASMA VS PLASMA
+
+```{r}
+# ── PLASMA GFAP ~ CSF + Plasma + MRI ────────────────────────────────────────
+
+sig_plasma_gfap <- c(
+
+  # "fl_plasma__ALL__abeta_40_log2",
+  "fl_plasma__ALL__ptau_181_log2",
+  "fl_plasma__ALL__abeta_42_log2",
+  "fl_plasma__ALL__vegf_a_log2",
+  "fl_cyto_heparin_plasma_ifn_g_log2",
+  "fl_plasma__ALL__il_1b_log2",
+  "fl_cyto_heparin_plasma_il_2_log2",
+  "fl_cyto_heparin_plasma_il_4_log2",
+  "fl_plasma__ALL__mmp_9_log2",
+    "fl_albumin_index_log2"
+
+  # MRI: very few participants overlap with plasma GFAP — skip unless n allows
+)
+
+#     "fl_csf__ALL__ptau_log2",
+#   "fl_cyto_csf_ifn_g_log2",
+#   "fl_msd_csf_mmp_9_log2",
+#   "fl_csf__ALL__mmp_10_log2"
+vars_gfap_plasma <- c("fl_plasma__ALL__gfap_log2", sig_plasma_gfap) |> unique()
+
+result_plasma_gfap <- e_plot_complete_by_variable_subset(
+  dat      = dat_sheet,
+  var_list = vars_gfap_plasma,
+  var_resp = "fl_plasma__ALL__gfap_log2"
+)
+
+plot_capture_plasma_gfap <- grid::grid.grabExpr({
+  e_plot_complete_by_variable_subset(
+    dat              = dat_sheet,
+    var_list         = vars_gfap_plasma,
+    var_resp         = "fl_plasma__ALL__gfap_log2",
+  )
+})
+
+ggsave(
+  "All_figures_for_paper/plot_capture_plasma_gfap_tradeoff.png",
+  plot   = cowplot::ggdraw(plot_capture_plasma_gfap),
+  width  = 10, height = 10, dpi = 300, bg = "white"
+)
+
+# Print to choose best row
+print(result_plasma_gfap[, c("n_complete", "n_vars")])
+
+# ── Adjust row index after inspecting the trade-off plot ────────────────────
+best_subset_vars <- result_plasma_gfap$table$var_names[[1]]
+cat("N complete:", result_plasma_gfap$table$n_complete[1], "\n")
+cat("Variables:", paste(best_subset_vars, collapse = ", "), "\n")
+
+var_resp_gfap_plasma <- "fl_plasma__ALL__gfap_log2"
+
+pred_vars <- best_subset_vars[!best_subset_vars %in%
+               c(var_resp_gfap_plasma, "age", "sex")]
+
+dat_lm_plasma_gfap <- dat_sheet |>
+  dplyr::select(all_of(var_resp_gfap_plasma), all_of(pred_vars), age, sex) |>
+  tidyr::drop_na()
+
+cat("N after drop_na:", nrow(dat_lm_plasma_gfap), "\n")
+cat("Predictors (", length(pred_vars), "):\n")
+print(pred_vars)
+
+form_main_plasma_gfap <- as.formula(paste(
+  var_resp_gfap_plasma, "~ age + sex +",
+  paste(pred_vars, collapse = " + ")
+))
+
+form_upper_plasma_gfap <- as.formula(paste(
+  var_resp_gfap_plasma, "~ age + sex +",
+  paste(pred_vars, collapse = " + "), "+",
+  paste0("age:", pred_vars, collapse = " + "), "+",
+  paste0("sex:", pred_vars, collapse = " + ")
+))
+
+form_lower_plasma_gfap <- as.formula(paste(var_resp_gfap_plasma, "~ 1"))
+
+fit_step_plasma_gfap <- step(
+  lm(form_main_plasma_gfap, data = dat_lm_plasma_gfap),
+  scope     = list(lower = form_lower_plasma_gfap, upper = form_upper_plasma_gfap),
+  direction = "both",
+  k         = 2,
+  trace     = 0
+)
+
+summary(fit_step_plasma_gfap)
+
+e_plot_lm_diagnostics(fit_step_plasma_gfap,
+  sw_plot_set = c(NA, "simple", "simpleAV", "all")[2])
+
+fit_contrasts_plasma_gfap <- e_plot_model_contrasts(
+  fit                            = fit_step_plasma_gfap,
+  dat_cont                       = dat_lm_plasma_gfap,
+  sw_print                       = FALSE,
+  sw_table_in_plot               = FALSE,
+  adjust_method                  = "bonferroni",
+  CI_level                       = 0.95,
+  sw_marginal_even_if_interaction = TRUE,
+  sw_TWI_plots_keep              = "singles",
+  sw_produce_plots               = TRUE
+)
+
+plot_plasma_gfap <- save_contrast_grid(
+  p_list   = fit_contrasts_plasma_gfap$plots,
+  filename = "plot_plasma_gfap_vs_all.png"
+)
+```
+
+# GFAP as response :GFAP CSF VS PLASMA
+
+```{r}
+# ── CSF GFAP ~ CSF + Plasma + MRI ───────────────────────────────────────────
+
+sig_plasma_gfap <- c(
+  
+"fl_plasma__ALL__ptau_181_log2",
+"fl_plasma__ALL__ptau_217_log2",
+"fl_plasma__ALL__tie2_log2",
+"fl_plasma__ALL__vegf_a_log2",
+"fl_plasma__ALL__vegf_d_log2",
+"fl_plasma__ALL__vegf_c_log2",
+"fl_cyto_heparin_plasma_ifn_g_log2",
+"fl_cyto_heparin_plasma_il_2_log2",
+"fl_cyto_heparin_plasma_il_10_log2",
+"fl_plasma__ALL__mmp_9_log2",
+"fl_plasma__ALL__nfl_log2"
+)
+
+# MRi 
+  # MRI (colored)
+  # "mri_mean_cort_thick_mm",
+  # "mri_dti_freewater_mean",
+  #  "mri_dti_psmd"   ,
+  #  "mri_percent_vol_hippo" 
+
+vars_gfap_plasma <- c("fl_csf__ALL__gfap_log2", sig_plasma_gfap) |> unique()
+
+result_csf_gfap <- e_plot_complete_by_variable_subset(
+  dat      = dat_sheet,
+  var_list = vars_gfap_plasma,
+  var_resp = "fl_csf__ALL__gfap_log2"
+)
+
+#later I can add that if need  to save it
+# plot_capture_csf_gfap <- grid::grid.grabExpr({
+#   e_plot_complete_by_variable_subset(
+#     dat              = dat_sheet,
+#     var_list         = vars_gfap_csf,
+#     var_resp         = "fl_csf__ALL__gfap_log2",
+#     sw_n_complete = 5
+#     )
+# })
+# 
+# 
+# ggsave(
+#   "All_figures_for_paper/plot_capture_csf_gfap_tradeoff.png",
+#   plot   = cowplot::ggdraw(plot_capture_csf_gfap),
+#   width  = 10, height = 10, dpi = 300, bg = "white"
+# )
+
+# Print to choose best row
+print(result_csf_gfap[, c("n_complete", "n_vars")])
+
+# ── Adjust row index after inspecting the trade-off plot ────────────────────
+best_subset_vars <- result_csf_gfap$table$var_names[[3]]
+cat("N complete:", result_csf_gfap$table$n_complete[3], "\n")
+cat("Variables:", paste(best_subset_vars, collapse = ", "), "\n")
+
+var_resp_gfap_csf <- "fl_csf__ALL__gfap_log2"
+
+pred_vars <- best_subset_vars[!best_subset_vars %in%
+               c(var_resp_gfap_csf, "age", "sex")]
+
+dat_lm_csf_gfap <- dat_sheet |>
+  dplyr::select(all_of(var_resp_gfap_csf), all_of(pred_vars), age, sex) |>
+  tidyr::drop_na()
+
+cat("N after drop_na:", nrow(dat_lm_csf_gfap), "\n")
+cat("Predictors (", length(pred_vars), "):\n")
+print(pred_vars)
+
+form_main_csf_gfap <- as.formula(paste(
+  var_resp_gfap_csf, "~ age + sex +",
+  paste(pred_vars, collapse = " + ")
+))
+
+form_upper_csf_gfap <- as.formula(paste(
+  var_resp_gfap_csf, "~ age + sex +",
+  paste(pred_vars, collapse = " + "), "+",
+  paste0("age:", pred_vars, collapse = " + "), "+",
+  paste0("sex:", pred_vars, collapse = " + ")
+))
+
+form_lower_csf_gfap <- as.formula(paste(var_resp_gfap_csf, "~ 1"))
+
+fit_step_csf_gfap <- step(
+  lm(form_main_csf_gfap, data = dat_lm_csf_gfap),
+  scope     = list(lower = form_lower_csf_gfap, upper = form_upper_csf_gfap),
+  direction = "both",
+  k         = 2,
+  trace     = 0
+)
+
+summary(fit_step_csf_gfap)
+
+e_plot_lm_diagnostics(fit_step_csf_gfap,
+  sw_plot_set = c(NA, "simple", "simpleAV", "all")[2])
+
+fit_contrasts_csf_gfap <- e_plot_model_contrasts(
+  fit                            = fit_step_csf_gfap,
+  dat_cont                       = dat_lm_csf_gfap,
+  sw_print                       = FALSE,
+  sw_table_in_plot               = FALSE,
+  adjust_method                  = "bonferroni",
+  CI_level                       = 0.95,
+  sw_marginal_even_if_interaction = TRUE,
+  sw_TWI_plots_keep              = "singles",
+  sw_produce_plots               = TRUE
+)
+
+plot_csf_gfap <- save_contrast_grid(
+  p_list   = fit_contrasts_csf_gfap$plots,
+  filename = "plot_csf_gfap_vs_all.png"
+)
+
+
+
+```
+
+# GFAP as response :GFAP plasma VS csf
+
+```{r}
+# ── PLASMA GFAP ~ CSF + Plasma + MRI ────────────────────────────────────────
+
+sig_csf_gfap <- c(
+
+  "fl_abeta_4240_ratio_log2",
+  "fl_csf__ALL__ptau_log2",
+  "fl_angio_csf_vegf_a_log2",
+  "fl_angio_csf_vegf_c_log2",
+  "fl_cyto_csf_ifn_g_log2",
+  "fl_csf__ALL__il_1b_log2",
+  "fl_cyto_csf_il_2_log2",
+  "fl_cyto_csf_il_4_log2",
+  "fl_cyto_csf_il_8_log2",
+  "fl_cyto_csf_il_13_log2",
+  "fl_msd_csf_mmp_1_log2",
+  "fl_msd_csf_mmp_9_log2",
+  "fl_csf_igg_log2",
+  "fl_albumin_index_log2"
+  
+)
+
+
+vars_gfap_csf <- c("fl_plasma__ALL__gfap_log2", sig_csf_gfap) |> unique()
+
+result_plasma_gfap <- e_plot_complete_by_variable_subset(
+  dat      = dat_sheet,
+  var_list = vars_gfap_csf,
+  var_resp = "fl_plasma__ALL__gfap_log2"
+)
+
+
+
+
+plot_capture_plasma_gfap <- grid::grid.grabExpr({
+  e_plot_complete_by_variable_subset(
+    dat              = dat_sheet,
+    var_list         = vars_gfap_plasma,
+    var_resp         = "fl_plasma__ALL__gfap_log2",
+  )
+})
+
+ggsave(
+  "All_figures_for_paper/plot_capture_plasma_gfap_tradeoff.png",
+  plot   = cowplot::ggdraw(plot_capture_plasma_gfap),
+  width  = 10, height = 10, dpi = 300, bg = "white"
+)
+
+# Print to choose best row
+print(result_plasma_gfap[, c("n_complete", "n_vars")])
+
+# ── Adjust row index after inspecting the trade-off plot ────────────────────
+best_subset_vars <- result_plasma_gfap$table$var_names[[2]]
+cat("N complete:", result_plasma_gfap$table$n_complete[2], "\n")
+cat("Variables:", paste(best_subset_vars, collapse = ", "), "\n")
+
+var_resp_gfap_plasma <- "fl_plasma__ALL__gfap_log2"
+
+pred_vars <- best_subset_vars[!best_subset_vars %in%
+               c(var_resp_gfap_plasma, "age", "sex")]
+
+dat_lm_plasma_gfap <- dat_sheet |>
+  dplyr::select(all_of(var_resp_gfap_plasma), all_of(pred_vars), age, sex) |>
+  tidyr::drop_na()
+
+cat("N after drop_na:", nrow(dat_lm_plasma_gfap), "\n")
+cat("Predictors (", length(pred_vars), "):\n")
+print(pred_vars)
+
+form_main_plasma_gfap <- as.formula(paste(
+  var_resp_gfap_plasma, "~ age + sex +",
+  paste(pred_vars, collapse = " + ")
+))
+
+form_upper_plasma_gfap <- as.formula(paste(
+  var_resp_gfap_plasma, "~ age + sex +",
+  paste(pred_vars, collapse = " + "), "+",
+  paste0("age:", pred_vars, collapse = " + "), "+",
+  paste0("sex:", pred_vars, collapse = " + ")
+))
+
+form_lower_plasma_gfap <- as.formula(paste(var_resp_gfap_plasma, "~ 1"))
+
+fit_step_plasma_gfap <- step(
+  lm(form_main_plasma_gfap, data = dat_lm_plasma_gfap),
+  scope     = list(lower = form_lower_plasma_gfap, upper = form_upper_plasma_gfap),
+  direction = "both",
+  k         = 2,
+  trace     = 0
+)
+
+summary(fit_step_plasma_gfap)
+
+e_plot_lm_diagnostics(fit_step_plasma_gfap,
+  sw_plot_set = c(NA, "simple", "simpleAV", "all")[2])
+
+fit_contrasts_plasma_gfap <- e_plot_model_contrasts(
+  fit                            = fit_step_plasma_gfap,
+  dat_cont                       = dat_lm_plasma_gfap,
+  sw_print                       = FALSE,
+  sw_table_in_plot               = FALSE,
+  adjust_method                  = "bonferroni",
+  CI_level                       = 0.95,
+  sw_marginal_even_if_interaction = TRUE,
+  sw_TWI_plots_keep              = "singles",
+  sw_produce_plots               = TRUE
+)
+
+plot_plasma_gfap <- save_contrast_grid(
+  p_list   = fit_contrasts_plasma_gfap$plots,
+  filename = "plot_plasma_gfap_vs_all.png"
+)
+```
+
+# Plasma GFAP vs MRI 
+
+```{r}
+
+
+# ── PLASMA GFAP ~ CSF + Plasma + MRI ────────────────────────────────────────
+
+sig_mri_gfap <- c(
+
+"mri_dti_psmd",
+"mri_dti_freewater_mean",
+"mri_mean_cort_thick_mm"
+  
+)
+
+
+vars_gfap_mri <- c("fl_plasma__ALL__gfap_log2", sig_mri_gfap) |> unique()
+
+result_plasma_gfap <- e_plot_complete_by_variable_subset(
+  dat      = dat_sheet,
+  var_list = vars_gfap_mri,
+  var_resp = "fl_plasma__ALL__gfap_log2"
+)
+
+plot_capture_plasma_gfap <- grid::grid.grabExpr({
+  e_plot_complete_by_variable_subset(
+    dat              = dat_sheet,
+    var_list         = vars_gfap_plasma,
+    var_resp         = "fl_plasma__ALL__gfap_log2",
+  )
+})
+
+ggsave(
+  "All_figures_for_paper/plot_capture_plasma_gfap_tradeoff.png",
+  plot   = cowplot::ggdraw(plot_capture_plasma_gfap),
+  width  = 10, height = 10, dpi = 300, bg = "white"
+)
+
+# Print to choose best row
+print(result_plasma_gfap[, c("n_complete", "n_vars")])
+
+# ── Adjust row index after inspecting the trade-off plot ────────────────────
+best_subset_vars <- result_plasma_gfap$table$var_names[[2]]
+cat("N complete:", result_plasma_gfap$table$n_complete[2], "\n")
+cat("Variables:", paste(best_subset_vars, collapse = ", "), "\n")
+
+var_resp_gfap_plasma <- "fl_plasma__ALL__gfap_log2"
+
+pred_vars <- best_subset_vars[!best_subset_vars %in%
+               c(var_resp_gfap_plasma, "age", "sex")]
+
+dat_lm_plasma_gfap <- dat_sheet |>
+  dplyr::select(all_of(var_resp_gfap_plasma), all_of(pred_vars), age, sex) |>
+  tidyr::drop_na()
+
+cat("N after drop_na:", nrow(dat_lm_plasma_gfap), "\n")
+cat("Predictors (", length(pred_vars), "):\n")
+print(pred_vars)
+
+form_main_plasma_gfap <- as.formula(paste(
+  var_resp_gfap_plasma, "~ age + sex +",
+  paste(pred_vars, collapse = " + ")
+))
+
+form_upper_plasma_gfap <- as.formula(paste(
+  var_resp_gfap_plasma, "~ age + sex +",
+  paste(pred_vars, collapse = " + "), "+",
+  paste0("age:", pred_vars, collapse = " + "), "+",
+  paste0("sex:", pred_vars, collapse = " + ")
+))
+
+form_lower_plasma_gfap <- as.formula(paste(var_resp_gfap_plasma, "~ 1"))
+
+fit_step_plasma_gfap <- step(
+  lm(form_main_plasma_gfap, data = dat_lm_plasma_gfap),
+  scope     = list(lower = form_lower_plasma_gfap, upper = form_upper_plasma_gfap),
+  direction = "both",
+  k         = 2,
+  trace     = 0
+)
+
+summary(fit_step_plasma_gfap)
+
+e_plot_lm_diagnostics(fit_step_plasma_gfap,
+  sw_plot_set = c(NA, "simple", "simpleAV", "all")[2])
+
+fit_contrasts_plasma_gfap <- e_plot_model_contrasts(
+  fit                            = fit_step_plasma_gfap,
+  dat_cont                       = dat_lm_plasma_gfap,
+  sw_print                       = FALSE,
+  sw_table_in_plot               = FALSE,
+  adjust_method                  = "bonferroni",
+  CI_level                       = 0.95,
+  sw_marginal_even_if_interaction = TRUE,
+  sw_TWI_plots_keep              = "singles",
+  sw_produce_plots               = TRUE
+)
+
+plot_plasma_gfap <- save_contrast_grid(
+  p_list   = fit_contrasts_plasma_gfap$plots,
+  filename = "plot_plasma_gfap_vs_all.png"
+)
+```
+
+
+#CSF GFAP MRI 
+
+```{r}
+# ── PLASMA GFAP ~ CSF + Plasma + MRI ────────────────────────────────────────
+
+sig_mri_csfgfap <- c(
+
+"mri_dti_psmd",
+"mri_dti_freewater_mean",
+"mri_mean_cort_thick_mm",
+"mri_percent_vol_hippo" 
+
+  
+)
+
+
+vars_gfap_mri <- c("fl_csf__ALL__gfap_log2", sig_mri_csfgfap) |> unique()
+
+result_csf_gfap <- e_plot_complete_by_variable_subset(
+  dat      = dat_sheet,
+  var_list = vars_gfap_mri,
+  var_resp = "fl_csf__ALL__gfap_log2"
+)
+
+plot_capture_plasma_gfap <- grid::grid.grabExpr({
+  e_plot_complete_by_variable_subset(
+    dat              = dat_sheet,
+    var_list         = vars_gfap_csf,
+    var_resp         = "fl_csf__ALL__gfap_log2",
+  )
+})
+
+ggsave(
+  "All_figures_for_paper/plot_capture_plasma_gfap_tradeoff.png",
+  plot   = cowplot::ggdraw(plot_capture_plasma_gfap),
+  width  = 10, height = 10, dpi = 300, bg = "white"
+)
+
+# Print to choose best row
+print(result_csf_gfap[, c("n_complete", "n_vars")])
+
+# ── Adjust row index after inspecting the trade-off plot ────────────────────
+best_subset_vars <- result_csf_gfap$table$var_names[[5]]
+cat("N complete:", result_csf_gfap$table$n_complete[5], "\n")
+cat("Variables:", paste(best_subset_vars, collapse = ", "), "\n")
+
+var_resp_gfap_csf <- "fl_csf__ALL__gfap_log2"
+
+pred_vars <- best_subset_vars[!best_subset_vars %in%
+               c(var_resp_gfap_csf, "age", "sex")]
+
+dat_lm_csf_gfap <- dat_sheet |>
+  dplyr::select(all_of(var_resp_gfap_csf), all_of(pred_vars), age, sex) |>
+  tidyr::drop_na()
+
+cat("N after drop_na:", nrow(dat_lm_csf_gfap), "\n")
+cat("Predictors (", length(pred_vars), "):\n")
+print(pred_vars)
+
+form_main_csf_gfap <- as.formula(paste(
+  var_resp_gfap_csf, "~ age + sex +",
+  paste(pred_vars, collapse = " + ")
+))
+
+form_upper_csf_gfap <- as.formula(paste(
+  var_resp_gfap_csf, "~ age + sex +",
+  paste(pred_vars, collapse = " + "), "+",
+  paste0("age:", pred_vars, collapse = " + "), "+",
+  paste0("sex:", pred_vars, collapse = " + ")
+))
+
+form_lower_csf_gfap <- as.formula(paste(var_resp_gfap_csf, "~ 1"))
+
+fit_step_csf_gfap <- step(
+  lm(form_main_csf_gfap, data = dat_lm_csf_gfap),
+  scope     = list(lower = form_lower_csf_gfap, upper = form_upper_csf_gfap),
+  direction = "both",
+  k         = 2,
+  trace     = 0
+)
+
+summary(fit_step_csf_gfap)
+
+e_plot_lm_diagnostics(fit_step_plasma_gfap,
+  sw_plot_set = c(NA, "simple", "simpleAV", "all")[2])
+
+fit_contrasts_plasma_gfap <- e_plot_model_contrasts(
+  fit                            = fit_step_csf_gfap,
+  dat_cont                       = dat_lm_csf_gfap,
+  sw_print                       = FALSE,
+  sw_table_in_plot               = FALSE,
+  adjust_method                  = "bonferroni",
+  CI_level                       = 0.95,
+  sw_marginal_even_if_interaction = TRUE,
+  sw_TWI_plots_keep              = "singles",
+  sw_produce_plots               = TRUE
+)
+
+plot_plasma_gfap <- save_contrast_grid(
+  p_list   = fit_contrasts_plasma_gfap$plots,
+  filename = "plot_plasma_gfap_vs_all.png"
+)
+```
+
+
+
+
+#pc1 VS CSF
+
+```{r}
+
+sig_composite_csf <- c(
+  "fl_abeta_4240_ratio_log2",
+  # "fl_csf__ALL__ptau_log2",
+  # "fl_angio_csf_bfgf_log2",
+  # "fl_angio_csf_flt_1_log2",
+  # "fl_angio_csf_tie2_log2",
+  # "fl_angio_csf_vegf_a_log2",
+  # "fl_angio_csf_vegf_c_log2",
+  # "fl_angio_csf_vegf_d_log2",
+  # "fl_cyto_csf_ifn_g_log2",
+  "fl_csf__ALL__il_1b_log2",
+  "fl_cyto_csf_il_4_log2",
+  # "fl_cyto_csf_il_6_log2",
+  # "fl_cyto_csf_il_8_log2",
+  "fl_cyto_csf_il_10_log2",
+  # "fl_cyto_csf_il_12p70_log2",
+  # "fl_cyto_csf_il_13_log2",
+  "fl_cyto_csf_tnf_a_log2",
+  "fl_msd_csf_mmp_1_log2",
+  "fl_msd_csf_mmp_2_log2"
+  # "fl_msd_csf_mmp_3_log2",
+  # "fl_msd_csf_mmp_9_log2",
+  # "fl_csf__ALL__mmp_10_log2",
+  # "fl_csf__ALL__plgf_log2",
+  # "fl_csf_igg_log2",
+  # "fl_igg_index_log2"
+  # "fl_myelin_basic_protein_log2",
+  # "fl_csf__ALL__nfl_log2"
+)
+
+
+
+vars_pc1_csf <- c("PC1", sig_composite_csf) |> unique()
+
+result_csf_pc1 <- e_plot_complete_by_variable_subset(
+  dat      = dat_sheet,
+  var_list = vars_pc1_csf,
+  var_resp = "PC1"
+)
+
+plot_capture_csf_pc1 <- grid::grid.grabExpr({
+  e_plot_complete_by_variable_subset(
+    dat      = dat_sheet,
+    var_list = vars_pc1_csf,
+    var_resp = "PC1"
+  )
+})
+
+ggsave(
+  "All_figures_for_paper/plot_capture_csf_pc1_tradeoff.png",
+  plot   = cowplot::ggdraw(plot_capture_csf_pc1),
+  width  = 10, height = 10, dpi = 300, bg = "white"
+)
+
+# Print table to choose best row
+print(result_csf_pc1$table[, c("n_complete", "n_vars")])
+
+# Adjust row index after inspecting the trade-off plot
+best_subset_vars <- result_csf_pc1$table$var_names[[6]]
+cat("N complete:", result_csf_pc1$table$n_complete[6], "\n")
+cat("Variables:", paste(best_subset_vars, collapse = ", "), "\n")
+
+var_resp_pc1_csf <- "PC1"
+
+pred_vars <- best_subset_vars[!best_subset_vars %in%
+  c(var_resp_pc1_csf, "age", "sex")]
+
+dat_lm_csf_pc1 <- dat_sheet |>
+  dplyr::select(all_of(var_resp_pc1_csf), all_of(pred_vars), age, sex) |>
+  tidyr::drop_na()
+
+cat("N after drop_na:", nrow(dat_lm_csf_pc1), "\n")
+cat("Predictors (", length(pred_vars), "):\n")
+print(pred_vars)
+
+form_main_csf_pc1 <- as.formula(paste(
+  var_resp_pc1_csf, "~ age + sex +",
+  paste(pred_vars, collapse = " + ")
+))
+
+form_upper_csf_pc1 <- as.formula(paste(
+  var_resp_pc1_csf, "~ age + sex +",
+  paste(pred_vars, collapse = " + "), "+",
+  paste0("age:", pred_vars, collapse = " + "), "+",
+  paste0("sex:", pred_vars, collapse = " + ")
+))
+
+# Keep age and sex in all models
+form_lower_csf_pc1 <- as.formula(paste(var_resp_pc1_csf, "~ age + sex"))
+
+fit_step_csf_pc1 <- step(
+  lm(form_main_csf_pc1, data = dat_lm_csf_pc1),
+  scope     = list(lower = form_lower_csf_pc1, upper = form_upper_csf_pc1),
+  direction = "both",
+  k         = 2,
+  trace     = 0
+)
+
+summary(fit_step_csf_pc1)
+
+e_plot_lm_diagnostics(
+  fit_step_csf_pc1,
+  sw_plot_set = c(NA, "simple", "simpleAV", "all")[2]
+)
+
+fit_contrasts_csf_pc1 <- e_plot_model_contrasts(
+  fit                             = fit_step_csf_pc1,
+  dat_cont                        = dat_lm_csf_pc1,
+  sw_print                        = FALSE,
+  sw_table_in_plot                = FALSE,
+  adjust_method                   = "bonferroni",
+  CI_level                        = 0.95,
+  sw_marginal_even_if_interaction = TRUE,
+  sw_TWI_plots_keep               = "singles",
+  sw_produce_plots                = TRUE
+)
+
+plot_csf_pc1 <- save_contrast_grid(
+  p_list   = fit_contrasts_csf_pc1$plots,
+  filename = "plot_csf_pc1_vs_all.png"
+)
+
+
+
+```
+
+

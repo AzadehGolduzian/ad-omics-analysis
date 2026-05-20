@@ -1,10 +1,34 @@
-# How to read Cis form Encode and Trans from Gtex and merge them as Reg variant : Note there is Diff Btw CisEQTL from GTEX and Cis from Encode 
-# I did write this code in Bash
+---
+title:   "Cis/Trans eQTL Variant Annotation Pipeline"
+subtitle: "Intersecting ENCODE cCREs with array variants and GTEx trans-eQTL windows"
+author:  "Azadeh Golduzian"
+date:    last-modified
+format:
+  html:
+    toc: true
+    code-fold: show
+    code-overflow: scroll
+execute:
+  eval: false   # Runs on HPC with PLINK .bim files; not executable locally
+  echo: true
+---
+
+# Overview
+
+This script classifies array-genotyped variants into three functional categories:
+
+- **CIS** — SNPs overlapping ENCODE candidate cis-Regulatory Elements (cCREs, GRCh38)
+- **TRANS** — SNPs falling within ±0.5 Mb windows of GTEx trans-eQTL loci
+- **REG** — Union of CIS and TRANS (used as the regulatory variant set downstream)
+
+Run as a bash heredoc on an HPC cluster with PLINK `.bim` files available.
+
+```{bash annotation-pipeline, eval=FALSE}
 R --vanilla -q << 'EOF'
 
 BASE      <- "/home/jupyter/Chapter2_Azadeh_01072026"
 GENO      <- "/home/jupyter/arrays_white"
-ANNOT_DIR <- file.path(Base, "annotation")
+ANNOT_DIR <- file.path(BASE, "annotation")
 
 dir.create(ANNOT_DIR, showWarnings = FALSE , recursive = TRUE)
 
@@ -38,9 +62,9 @@ col.names =c("CHR", "START", "END"))
 
 # Keep only autosomes, strip "chr" prefix
 
-ccre <- ccre [grep("^chr[0-9]+$"), CHR]
+ccre <- ccre[grep("^chr[0-9]+$", CHR)]
 ccre[, CHR:= as.integer(sub("^chr", "", CHR))]
-ccre <- ccre[!is.na(CHR & CHR >=1L & CHR <=22L)]
+ccre <- ccre[!is.na(CHR) & CHR >= 1L & CHR <= 22L]
 setkey (ccre, CHR, START, END)
 
 cat("ENCODE cCRE regions:", nrow(ccre), "\n")
@@ -164,3 +188,4 @@ cat(" TRANS_array_variants.txt <- trans-eQTL only\n")
 cat(" CIS_array_variants.txt   <- ENCODE cis only\n")
 cat(" annotation/variant_annotation_full.csv.gz <- full table\n")
 EOF
+```
