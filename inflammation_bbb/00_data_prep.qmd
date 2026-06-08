@@ -31,31 +31,17 @@ execute: # https://quarto.org/docs/computations/execution-options.html, https://
   echo:     true    # true, false  Include the source code in output
 ---
 
-<!---
-# Erik's compile commands in R:
-  setwd("D:/Dropbox/StatAcumen/consult/Authorship/2014_GaryRosenberg_UNM_NIH_VascularDementia_MRI/2024_ADRC/Analyses/202501_ADRC_Permeability")
-  fn_qmd <- "Erhardt_Rosenberg_ADRC_Fluid_Permeability_Analysis_20250219.qmd"
-  quarto::quarto_render(input = fn_qmd)
--->
 
 ```{r init, echo=FALSE}
+
 #options(width = 80)
 #options(warn  = -1)
 options(str   = strOptions(list.len = 1e3))
 options(knitr.kable.NA = '') # Display NAs as blanks
 my_seed <- 34567
 set.seed(my_seed)
+
 ```
-
---------------------------------------------------------------------------------
-
-# Next actions
-
-2/19/2025 Comparison presentation:
-
-<https://docs.google.com/presentation/d/10neeggTjkKFs3SFFL9hJXMTKkTZ0W43RY4E2Myppx1o/edit#slide=id.g33159024d0d_0_357>
-
-
 
 --------------------------------------------------------------------------------
 
