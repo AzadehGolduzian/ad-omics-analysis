@@ -78,26 +78,6 @@ library(modelsummary)
 ## Subset data
 
 ```{r chunk-004}
-# load("../../Data/Sweden.RData")
-# dat_sweden <-
-#   dat_all |>
-#   dplyr::select(
-#     demo_study_id
-#   , tidyselect::starts_with("fl_")
-#   , -tidyselect::ends_with("_log2")
-#   ) |>
-#   dplyr::mutate(
-#     I_Sweden    = TRUE
-#   , ID          = 20000 + 1:dplyr::n()
-#   , dx_current  = "Sweden"
-#   ) |>
-#   dplyr::rowwise() |>
-#   dplyr::mutate(
-#     prop_complete = mean(!is.na(dplyr::across(tidyselect::everything())))
-#   ) |>
-#   dplyr::ungroup()
-# rm(dat_all)
-# # e_plot_missing(dat_sweden)
 
 Var <- list()
 Var$ID <-
